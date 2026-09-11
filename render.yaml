@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: tekilive
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: ALLOWED_ORIGINS
+        value: ""
+      - key: MYMEMORY_EMAIL
+        value: ""

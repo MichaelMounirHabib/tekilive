@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TekiLive — Presenter Console</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0D1321; --panel:#141B2E; --panel-2:#1B2439; --border:#263047;
+    --violet:#7C3AED; --blue:#2563EB; --sky:#38BDF8; --gray:#8A93A6; --white:#F5F6FA;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:'Poppins', system-ui, sans-serif; background:var(--ink); color:var(--white); min-height:100vh;}
+  .wrap{max-width:1120px; margin:0 auto; padding:32px 24px 64px;}
+  header{display:flex; align-items:center; justify-content:space-between; padding-bottom:24px; border-bottom:1px solid var(--border); margin-bottom:24px; flex-wrap:wrap; gap:16px;}
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand-mark{width:34px; height:34px; border-radius:9px; background:linear-gradient(135deg, var(--violet), var(--blue)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px;}
+  .brand-name{font-size:18px; font-weight:600;}
+  .brand-sub{font-size:12.5px; color:var(--gray); margin-top:1px;}
+  .status-pill{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--gray); border:1px solid var(--border); padding:7px 14px; border-radius:999px;}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--gray);}
+  .dot.live{background:#34D399; box-shadow:0 0 0 0 rgba(52,211,153,.6); animation:pulse 1.6s infinite;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5);}70%{box-shadow:0 0 0 8px rgba(52,211,153,0);}100%{box-shadow:0 0 0 0 rgba(52,211,153,0);}}
+
+  .controls{display:grid; grid-template-columns:1fr 1fr auto; gap:16px; align-items:end; background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
+  label{display:block; font-size:12.5px; color:var(--gray); margin-bottom:7px; font-weight:500;}
+  select, input{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
+  .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:12px 22px; border-radius:10px; cursor:pointer; font-size:14px;}
+  .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
+  .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
+
+  .grid{display:grid; grid-template-columns:1.3fr 1fr; gap:20px;}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr;} .controls{grid-template-columns:1fr;} }
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:20px;}
+  .panel-title{font-size:13px; font-weight:600; color:var(--gray); margin-bottom:14px;}
+  .feed{max-height:380px; overflow-y:auto;}
+  .feed p{font-size:15px; line-height:1.6; margin-bottom:10px;}
+  .feed .interim{color:var(--gray); font-style:italic;}
+
+  .stat-row{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); font-size:14px;}
+  .stat-row:last-child{border-bottom:none;}
+  .stat-count{font-weight:600; color:var(--sky);}
+
+  .qr-wrap{display:flex; gap:14px; align-items:center; margin-top:16px;}
+  .qr-wrap img{width:120px; height:120px; border-radius:8px; background:#fff; padding:6px;}
+  .qr-url{font-size:12.5px; color:var(--gray); word-break:break-all;}
+
+  .session-badge{font-size:12.5px; color:var(--sky); font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="brand-mark">TL</div>
+      <div>
+        <div class="brand-name">TekiLive</div>
+        <div class="brand-sub">Presenter console — Phase 2 (multi-device)</div>
+      </div>
+    </div>
+    <div class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">Not connected</span></div>
+  </header>
+
+  <div class="controls">
+    <div>
+      <label for="sessionCode">Session / panel code</label>
+      <input id="sessionCode" value="DEMO" maxlength="12" style="text-transform:uppercase;">
+    </div>
+    <div>
+      <label for="srcLang">Speaker is talking in</label>
+      <select id="srcLang"></select>
+    </div>
+    <div style="display:flex; gap:10px;">
+      <button class="gradient-btn" id="toggleBtn">Start listening</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-title">Original — live transcript</div>
+      <div class="feed" id="originalFeed"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Live audience <span class="session-badge" id="sessionBadge"></span></div>
+      <div id="statsBox">
+        <div class="stat-row"><span>Connected devices</span><span class="stat-count" id="totalCount">0</span></div>
+        <div class="stat-row"><span>Translation latency</span><span class="stat-count" id="latencyValue">—</span></div>
+      </div>
+      <div class="qr-wrap">
+        <img id="qrImg" alt="QR code to join">
+        <div>
+          <div style="font-size:13px; margin-bottom:4px;">Audience scans to join</div>
+          <div class="qr-url" id="qrUrl">Starting server…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const LANGUAGES = [
+  { code:'en', name:'English',    speech:'en-US' },
+  { code:'ar', name:'Arabic',     speech:'ar-SA' },
+  { code:'fr', name:'French',     speech:'fr-FR' },
+  { code:'es', name:'Spanish',    speech:'es-ES' },
+  { code:'de', name:'German',     speech:'de-DE' },
+  { code:'zh', name:'Chinese',    speech:'zh-CN' },
+  { code:'pt', name:'Portuguese', speech:'pt-PT' },
+  { code:'ru', name:'Russian',    speech:'ru-RU' },
+  { code:'hi', name:'Hindi',      speech:'hi-IN' },
+  { code:'tr', name:'Turkish',    speech:'tr-TR' },
+];
+
+const srcSelect = document.getElementById('srcLang');
+LANGUAGES.forEach(l => {
+  const opt = document.createElement('option');
+  opt.value = l.code; opt.textContent = l.name;
+  if (l.code === 'en') opt.selected = true;
+  srcSelect.appendChild(opt);
+});
+
+const sessionInput = document.getElementById('sessionCode');
+const toggleBtn = document.getElementById('toggleBtn');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const originalFeed = document.getElementById('originalFeed');
+const totalCount = document.getElementById('totalCount');
+const statsBox = document.getElementById('statsBox');
+const sessionBadge = document.getElementById('sessionBadge');
+const qrImg = document.getElementById('qrImg');
+const qrUrl = document.getElementById('qrUrl');
+
+let ws = null, recognition = null, listening = false, interimEl = null;
+
+function setupQr(){
+  const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
+  const joinUrl = `${location.origin}/join.html?session=${code}`;
+  qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(joinUrl)}`;
+  qrUrl.textContent = joinUrl;
+  sessionBadge.textContent = code;
+}
+sessionInput.addEventListener('change', setupQr);
+setupQr();
+
+function connectWs(){
+  const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
+  ws.onopen = () => { statusText.textContent = 'Connected'; };
+  ws.onclose = () => { statusText.textContent = 'Disconnected — retrying…'; setTimeout(connectWs, 1500); };
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'stats') renderStats(msg);
+    if (msg.type === 'delivered') document.getElementById('latencyValue').textContent = `${msg.latency}ms`;
+  };
+}
+connectWs();
+
+function renderStats(msg){
+  totalCount.textContent = msg.totalAudience;
+  statsBox.querySelectorAll('.lang-row').forEach(el => el.remove());
+  Object.entries(msg.totals).forEach(([lang, count]) => {
+    const l = LANGUAGES.find(x => x.code === lang);
+    const row = document.createElement('div');
+    row.className = 'stat-row lang-row';
+    row.innerHTML = `<span>${l ? l.name : lang}</span><span class="stat-count">${count}</span>`;
+    statsBox.appendChild(row);
+  });
+}
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR){ toggleBtn.disabled = true; toggleBtn.textContent = 'Speech capture not supported'; }
+
+function buildRecognition(){
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = LANGUAGES.find(l => l.code === srcSelect.value).speech;
+  r.onresult = handleResult;
+  r.onerror = (e) => { if (e.error !== 'no-speech') console.warn('Speech error:', e.error); };
+  r.onend = () => { if (listening) { try { r.start(); } catch(e){} } };
+  return r;
+}
+
+function handleResult(event){
+  let interim = '', finalChunk = '';
+  for (let i = event.resultIndex; i < event.results.length; i++){
+    const t = event.results[i][0].transcript;
+    if (event.results[i].isFinal) finalChunk += t + ' '; else interim += t;
+  }
+  if (interim){
+    if (!interimEl){ interimEl = document.createElement('p'); interimEl.className = 'interim'; originalFeed.appendChild(interimEl); }
+    interimEl.textContent = interim;
+    originalFeed.scrollTop = originalFeed.scrollHeight;
+  }
+  if (finalChunk.trim()){
+    if (interimEl){ interimEl.remove(); interimEl = null; }
+    const p = document.createElement('p');
+    p.textContent = finalChunk.trim();
+    originalFeed.appendChild(p);
+    originalFeed.scrollTop = originalFeed.scrollHeight;
+    if (ws && ws.readyState === WebSocket.OPEN){
+      ws.send(JSON.stringify({ type:'final_transcript', text: finalChunk.trim(), srcLang: srcSelect.value }));
+    }
+  }
+}
+
+toggleBtn.addEventListener('click', () => {
+  if (!listening){
+    recognition = buildRecognition();
+    try {
+      recognition.start();
+      listening = true;
+      toggleBtn.textContent = 'Stop listening';
+      statusDot.classList.add('live');
+    } catch(e){ console.warn(e); }
+  } else {
+    listening = false;
+    recognition && recognition.stop();
+    toggleBtn.textContent = 'Start listening';
+    statusDot.classList.remove('live');
+  }
+});
+</script>
+</body>
+</html>

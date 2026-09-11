@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>TekiLive — Live Captions</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0D1321; --panel:#141B2E; --panel-2:#1B2439; --border:#263047;
+    --violet:#7C3AED; --blue:#2563EB; --sky:#38BDF8; --gray:#8A93A6; --white:#F5F6FA;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{font-family:'Poppins', system-ui, sans-serif; background:var(--ink); color:var(--white);}
+
+  /* ---- Language picker screen ---- */
+  #picker{min-height:100vh; display:flex; flex-direction:column; padding:32px 22px; }
+  .brand{display:flex; align-items:center; gap:10px; margin-bottom:34px;}
+  .brand-mark{width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg, var(--violet), var(--blue)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px;}
+  .brand-name{font-size:16px; font-weight:600;}
+  .session-line{font-size:13px; color:var(--gray); margin-top:1px;}
+  h1{font-size:22px; font-weight:600; margin-bottom:6px;}
+  .lede{font-size:14px; color:var(--gray); margin-bottom:26px; line-height:1.5;}
+  .lang-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .lang-btn{background:var(--panel); border:1px solid var(--border); color:var(--white); font-family:inherit; font-size:15px; font-weight:500; padding:18px; border-radius:14px; cursor:pointer; text-align:left;}
+  .lang-btn:active{border-color:var(--violet); background:rgba(124,58,237,.14);}
+
+  /* ---- Caption screen ---- */
+  #captions{display:none; min-height:100vh; flex-direction:column; padding:26px 22px;}
+  .cap-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .cap-lang{font-size:13px; color:var(--sky); font-weight:600;}
+  .change-btn{background:none; border:1px solid var(--border); color:var(--gray); font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:999px; cursor:pointer;}
+  .cap-status{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--gray); margin-bottom:18px;}
+  .dot{width:7px; height:7px; border-radius:50%; background:var(--gray);}
+  .dot.live{background:#34D399;}
+  .cap-body{flex:1; display:flex; align-items:center;}
+  #capText{font-size:clamp(22px, 6vw, 30px); line-height:1.5; font-weight:500;}
+  #capText.placeholder{color:var(--gray); font-weight:400; font-size:16px;}
+</style>
+</head>
+<body>
+
+<div id="picker">
+  <div class="brand">
+    <div class="brand-mark">TL</div>
+    <div>
+      <div class="brand-name">TekiLive</div>
+      <div class="session-line" id="sessionLine">Session —</div>
+    </div>
+  </div>
+  <h1>Choose your language</h1>
+  <div class="lede">Live captions from the stage, translated for you in real time.</div>
+  <div class="lang-grid" id="langGrid"></div>
+</div>
+
+<div id="captions">
+  <div class="cap-top">
+    <span class="cap-lang" id="capLangName"></span>
+    <button class="change-btn" id="changeBtn">Change language</button>
+  </div>
+  <div class="cap-status"><span class="dot" id="capDot"></span><span id="capStatusText">Connecting…</span></div>
+  <div class="cap-body"><div id="capText" class="placeholder">Waiting for the speaker to start…</div></div>
+</div>
+
+<script>
+const LANGUAGES = [
+  { code:'en', name:'English' }, { code:'ar', name:'Arabic' }, { code:'fr', name:'French' },
+  { code:'es', name:'Spanish' }, { code:'de', name:'German' }, { code:'zh', name:'Chinese' },
+  { code:'pt', name:'Portuguese' }, { code:'ru', name:'Russian' }, { code:'hi', name:'Hindi' },
+  { code:'tr', name:'Turkish' },
+];
+
+const params = new URLSearchParams(location.search);
+const sessionCode = (params.get('session') || 'DEMO').toUpperCase();
+document.getElementById('sessionLine').textContent = `Session ${sessionCode}`;
+
+const grid = document.getElementById('langGrid');
+LANGUAGES.forEach(l => {
+  const btn = document.createElement('button');
+  btn.className = 'lang-btn';
+  btn.textContent = l.name;
+  btn.addEventListener('click', () => joinAs(l));
+  grid.appendChild(btn);
+});
+
+let ws = null;
+function joinAs(lang){
+  document.getElementById('picker').style.display = 'none';
+  document.getElementById('captions').style.display = 'flex';
+  document.getElementById('capLangName').textContent = lang.name;
+  connect(lang.code);
+}
+
+document.getElementById('changeBtn').addEventListener('click', () => {
+  if (ws) ws.close();
+  document.getElementById('captions').style.display = 'none';
+  document.getElementById('picker').style.display = 'flex';
+});
+
+function connect(langCode){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}?role=audience&session=${sessionCode}&lang=${langCode}`);
+  const dot = document.getElementById('capDot');
+  const statusText = document.getElementById('capStatusText');
+  const capText = document.getElementById('capText');
+
+  ws.onopen = () => { dot.classList.add('live'); statusText.textContent = 'Connected — waiting for speech'; };
+  ws.onclose = () => { dot.classList.remove('live'); statusText.textContent = 'Disconnected — reconnecting…'; setTimeout(() => connect(langCode), 1500); };
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === 'caption'){
+      capText.classList.remove('placeholder');
+      capText.textContent = msg.text;
+      statusText.textContent = `Live — ${msg.latency}ms`;
+    }
+  };
+}
+</script>
+</body>
+</html>
