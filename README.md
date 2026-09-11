@@ -43,10 +43,33 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 |---|---|---|---|
 | `PORT` | no | `3000` | Port the server listens on (hosting platforms set this for you) |
 | `ALLOWED_ORIGINS` | no | *(empty = allow all)* | Comma-separated list of origins allowed to open a WebSocket connection, e.g. `https://tekilive.onrender.com` |
-| `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the MyMemory translation API for a higher free-tier rate limit |
+| `AZURE_TRANSLATOR_KEY` | recommended | *(empty)* | Azure Translator API key. When set, this becomes the translation provider (see below) |
+| `AZURE_TRANSLATOR_REGION` | with the key above | *(empty)* | Azure resource region, e.g. `eastus` |
+| `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the free MyMemory API (only used as a fallback when no Azure key is set) for a higher rate limit |
 
 Copy `.env.example` to `.env` for local runs if you want to set these; most
 hosting platforms let you set them directly in their dashboard instead.
+
+### Translation provider
+
+`translate.js` picks Azure Translator when `AZURE_TRANSLATOR_KEY` is set,
+and falls back to the free MyMemory API otherwise. **The MyMemory fallback
+is for local development only** — its anonymous quota is small (and shared
+across whatever IP a request comes from, including other apps on the same
+cloud host), so it will hit "quota exhausted" errors under any real usage.
+For an actual deployment, get a free Azure Translator key:
+
+1. [portal.azure.com](https://portal.azure.com) → **Create a resource** →
+   search **Translator** → create it on the **F0 (free)** pricing tier
+   (2 million characters/month free).
+2. Once created, open the resource → **Keys and Endpoint**, and copy **Key 1**
+   and the **Region**.
+3. Set `AZURE_TRANSLATOR_KEY` and `AZURE_TRANSLATOR_REGION` in your hosting
+   platform's environment variables.
+
+Swapping in a different provider (DeepL, Google Cloud Translation) later is
+a one-file change — add another `translate<Provider>()` function in
+`translate.js` and branch to it in `translate()`.
 
 ## Run it locally
 
@@ -95,9 +118,10 @@ instance to avoid that for a live event.
 
 ## What's still a placeholder, worth flagging honestly in the pitch
 
-- **Translation engine:** using the free MyMemory API. It's isolated behind
-  one function (`translate.js`), so swapping in Azure Translator or DeepL
-  for better accuracy, higher rate limits, and an SLA is a one-file change.
+- **Translation engine:** Azure Translator in production (set
+  `AZURE_TRANSLATOR_KEY`), MyMemory as an unauthenticated local-dev fallback.
+  Isolated behind one function (`translate.js`), so swapping to DeepL or
+  Google Cloud Translation later is a one-file change.
 - **No persistence:** transcripts/captions aren't saved anywhere. Adding a
   session log would unlock a post-event transcript/summary deliverable.
 - **No auth on sessions:** anyone with the QR/URL can join a session. Fine

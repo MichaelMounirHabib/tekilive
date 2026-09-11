@@ -1,19 +1,57 @@
 /**
  * Translation provider, isolated behind one function.
- * Swap in Azure Translator, DeepL, etc. by changing this file only —
- * callers just await translate(text, source, target).
+ * Swap in DeepL, Google Cloud Translation, etc. by changing this file
+ * only — callers just await translate(text, source, target).
+ *
+ * Uses Azure Translator when AZURE_TRANSLATOR_KEY is set (production);
+ * falls back to the free MyMemory API otherwise (fine for local dev,
+ * but its anonymous quota is small and shared across whatever IP the
+ * request comes from — not reliable once actually deployed).
  */
 
+const AZURE_KEY = process.env.AZURE_TRANSLATOR_KEY || '';
+const AZURE_REGION = process.env.AZURE_TRANSLATOR_REGION || '';
+const AZURE_ENDPOINT = process.env.AZURE_TRANSLATOR_ENDPOINT || 'https://api.cognitive.microsofttranslator.com';
 const MYMEMORY_EMAIL = process.env.MYMEMORY_EMAIL || '';
 
-async function translate(text, source, target) {
-  if (source === target) return text;
+// Azure uses script-qualified codes for a few languages our language list
+// keeps generic (e.g. 'zh'); map only where they differ.
+const AZURE_LANG_MAP = { zh: 'zh-Hans' };
+
+async function translateAzure(text, source, target) {
+  const from = AZURE_LANG_MAP[source] || source;
+  const to = AZURE_LANG_MAP[target] || target;
+  const url = `${AZURE_ENDPOINT}/translate?api-version=3.0&from=${from}&to=${to}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Ocp-Apim-Subscription-Key': AZURE_KEY,
+      'Ocp-Apim-Subscription-Region': AZURE_REGION,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify([{ Text: text }]),
+  });
+  if (!res.ok) throw new Error(`Azure Translator error: ${res.status}`);
+  const data = await res.json();
+  const translated = data?.[0]?.translations?.[0]?.text;
+  if (!translated) throw new Error('Azure Translator returned no translation');
+  return translated;
+}
+
+async function translateMyMemory(text, source, target) {
   const params = new URLSearchParams({ q: text, langpair: `${source}|${target}` });
   if (MYMEMORY_EMAIL) params.set('de', MYMEMORY_EMAIL);
   const url = `https://api.mymemory.translated.net/get?${params.toString()}`;
   const res = await fetch(url);
   const data = await res.json();
+  if (data?.quotaFinished) throw new Error('MyMemory daily quota exhausted');
   return data?.responseData?.translatedText || text;
+}
+
+async function translate(text, source, target) {
+  if (source === target) return text;
+  if (AZURE_KEY) return translateAzure(text, source, target);
+  return translateMyMemory(text, source, target);
 }
 
 module.exports = { translate };
