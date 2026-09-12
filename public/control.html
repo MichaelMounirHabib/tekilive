@@ -34,13 +34,15 @@
   @media (max-width:900px){ .grid{grid-template-columns:1fr;} .controls{grid-template-columns:1fr;} }
   .panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:20px;}
   .panel-title{font-size:13px; font-weight:600; color:var(--gray); margin-bottom:14px;}
-  .feed{max-height:380px; overflow-y:auto;}
-  .feed p{font-size:15px; line-height:1.6; margin-bottom:10px;}
+  .feed{max-height:380px; overflow-y:auto; scroll-behavior:smooth;}
+  .feed p{font-size:15px; line-height:1.6; margin-bottom:10px; animation:lineIn .25s ease-out;}
   .feed .interim{color:var(--gray); font-style:italic;}
+  @keyframes lineIn{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);}}
 
   .stat-row{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border); font-size:14px;}
   .stat-row:last-child{border-bottom:none;}
   .stat-count{font-weight:600; color:var(--sky);}
+  .stat-count.warn{color:#F59E0B;}
 
   .qr-wrap{display:flex; gap:14px; align-items:center; margin-top:16px;}
   .qr-wrap img{width:120px; height:120px; border-radius:8px; background:#fff; padding:6px;}
@@ -75,6 +77,7 @@
       <button class="gradient-btn" id="toggleBtn">Start listening</button>
     </div>
   </div>
+  <div id="micWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
 
   <div class="grid">
     <div class="panel">
@@ -112,6 +115,7 @@ const LANGUAGES = [
   { code:'tr', name:'Turkish',    speech:'tr-TR' },
 ];
 
+const RTL_LANGS = ['ar'];
 const srcSelect = document.getElementById('srcLang');
 LANGUAGES.forEach(l => {
   const opt = document.createElement('option');
@@ -130,8 +134,29 @@ const statsBox = document.getElementById('statsBox');
 const sessionBadge = document.getElementById('sessionBadge');
 const qrImg = document.getElementById('qrImg');
 const qrUrl = document.getElementById('qrUrl');
+const micWarning = document.getElementById('micWarning');
+
+const MAX_TRANSCRIPT_LINES = 60;
 
 let ws = null, recognition = null, listening = false, interimEl = null;
+let pendingInterimText = null, interimFrame = null;
+let restartFailures = 0;
+
+function isNearBottom(el){
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+}
+
+function trimFeed(){
+  while (originalFeed.children.length > MAX_TRANSCRIPT_LINES){
+    originalFeed.removeChild(originalFeed.firstChild);
+  }
+}
+
+function updateFeedDirection(){
+  originalFeed.dir = RTL_LANGS.includes(srcSelect.value) ? 'rtl' : 'ltr';
+}
+srcSelect.addEventListener('change', updateFeedDirection);
+updateFeedDirection();
 
 function setupQr(){
   const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
@@ -152,7 +177,11 @@ function connectWs(){
   ws.onmessage = (evt) => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
-    if (msg.type === 'delivered') document.getElementById('latencyValue').textContent = `${msg.latency}ms`;
+    if (msg.type === 'delivered'){
+      const el = document.getElementById('latencyValue');
+      el.textContent = `${msg.latency}ms`;
+      el.classList.toggle('warn', msg.latency > 2500);
+    }
   };
 }
 connectWs();
@@ -178,9 +207,39 @@ function buildRecognition(){
   r.interimResults = true;
   r.lang = LANGUAGES.find(l => l.code === srcSelect.value).speech;
   r.onresult = handleResult;
+  r.onstart = () => { restartFailures = 0; micWarning.style.display = 'none'; };
   r.onerror = (e) => { if (e.error !== 'no-speech') console.warn('Speech error:', e.error); };
-  r.onend = () => { if (listening) { try { r.start(); } catch(e){} } };
+  r.onend = () => {
+    if (!listening) return;
+    try {
+      r.start();
+    } catch (e) {
+      restartFailures++;
+      if (restartFailures < 5) setTimeout(() => { if (listening) try { r.start(); } catch (e2) {} }, 300);
+      else {
+        listening = false;
+        toggleBtn.textContent = 'Start listening';
+        statusDot.classList.remove('live');
+        micWarning.textContent = 'Mic stopped responding — click Start listening again';
+        micWarning.style.display = 'block';
+      }
+    }
+  };
   return r;
+}
+
+// Web Speech fires onresult many times a second while the speaker talks;
+// writing every interim update straight to the DOM causes visible lag
+// over a long session. Coalesce them to one paint per animation frame.
+function scheduleInterimRender(){
+  if (interimFrame) return;
+  interimFrame = requestAnimationFrame(() => {
+    interimFrame = null;
+    if (pendingInterimText === null) return;
+    if (!interimEl){ interimEl = document.createElement('p'); interimEl.className = 'interim'; originalFeed.appendChild(interimEl); }
+    interimEl.textContent = pendingInterimText;
+    if (isNearBottom(originalFeed)) originalFeed.scrollTop = originalFeed.scrollHeight;
+  });
 }
 
 function handleResult(event){
@@ -190,16 +249,18 @@ function handleResult(event){
     if (event.results[i].isFinal) finalChunk += t + ' '; else interim += t;
   }
   if (interim){
-    if (!interimEl){ interimEl = document.createElement('p'); interimEl.className = 'interim'; originalFeed.appendChild(interimEl); }
-    interimEl.textContent = interim;
-    originalFeed.scrollTop = originalFeed.scrollHeight;
+    pendingInterimText = interim;
+    scheduleInterimRender();
   }
   if (finalChunk.trim()){
+    pendingInterimText = null;
     if (interimEl){ interimEl.remove(); interimEl = null; }
+    const wasNearBottom = isNearBottom(originalFeed);
     const p = document.createElement('p');
     p.textContent = finalChunk.trim();
     originalFeed.appendChild(p);
-    originalFeed.scrollTop = originalFeed.scrollHeight;
+    trimFeed();
+    if (wasNearBottom) originalFeed.scrollTop = originalFeed.scrollHeight;
     if (ws && ws.readyState === WebSocket.OPEN){
       ws.send(JSON.stringify({ type:'final_transcript', text: finalChunk.trim(), srcLang: srcSelect.value }));
     }
@@ -208,6 +269,7 @@ function handleResult(event){
 
 toggleBtn.addEventListener('click', () => {
   if (!listening){
+    micWarning.style.display = 'none';
     recognition = buildRecognition();
     try {
       recognition.start();

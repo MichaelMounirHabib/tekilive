@@ -27,16 +27,20 @@
   .lang-btn:active{border-color:var(--violet); background:rgba(124,58,237,.14);}
 
   /* ---- Caption screen ---- */
-  #captions{display:none; min-height:100vh; flex-direction:column; padding:26px 22px;}
+  #captions{display:none; height:100vh; flex-direction:column; padding:26px 22px;}
   .cap-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
   .cap-lang{font-size:13px; color:var(--sky); font-weight:600;}
   .change-btn{background:none; border:1px solid var(--border); color:var(--gray); font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:999px; cursor:pointer;}
   .cap-status{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--gray); margin-bottom:18px;}
   .dot{width:7px; height:7px; border-radius:50%; background:var(--gray);}
   .dot.live{background:#34D399;}
-  .cap-body{flex:1; display:flex; align-items:center;}
-  #capText{font-size:clamp(22px, 6vw, 30px); line-height:1.5; font-weight:500;}
-  #capText.placeholder{color:var(--gray); font-weight:400; font-size:16px;}
+
+  .cap-feed{flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:14px; overflow-y:auto; scroll-behavior:smooth; -webkit-overflow-scrolling:touch;}
+  .cap-line{font-size:clamp(20px, 5.5vw, 28px); line-height:1.5; font-weight:500; opacity:1; animation:capIn .3s ease-out;}
+  .cap-line.placeholder{color:var(--gray); font-weight:400; font-size:16px; animation:none;}
+  .cap-feed .cap-line:not(:last-child):nth-last-child(2){opacity:.55;}
+  .cap-feed .cap-line:not(:last-child):not(:nth-last-child(2)){opacity:.3;}
+  @keyframes capIn{from{opacity:0; transform:translateY(10px);} to{transform:translateY(0);}}
 </style>
 </head>
 <body>
@@ -60,7 +64,7 @@
     <button class="change-btn" id="changeBtn">Change language</button>
   </div>
   <div class="cap-status"><span class="dot" id="capDot"></span><span id="capStatusText">Connecting…</span></div>
-  <div class="cap-body"><div id="capText" class="placeholder">Waiting for the speaker to start…</div></div>
+  <div class="cap-feed" id="capFeed"><div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div></div>
 </div>
 
 <script>
@@ -84,34 +88,62 @@ LANGUAGES.forEach(l => {
   grid.appendChild(btn);
 });
 
-let ws = null;
+const MAX_CAPTION_LINES = 40;
+const capFeed = document.getElementById('capFeed');
+
+function isNearBottom(el){
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+}
+
+function addCaptionLine(text){
+  const placeholder = document.getElementById('capPlaceholder');
+  if (placeholder) placeholder.remove();
+  const wasNearBottom = isNearBottom(capFeed);
+  const line = document.createElement('div');
+  line.className = 'cap-line';
+  line.textContent = text;
+  capFeed.appendChild(line);
+  while (capFeed.children.length > MAX_CAPTION_LINES) capFeed.removeChild(capFeed.firstChild);
+  if (wasNearBottom) capFeed.scrollTop = capFeed.scrollHeight;
+}
+
+const RTL_LANGS = ['ar'];
+
+let ws = null, manualClose = false;
 function joinAs(lang){
   document.getElementById('picker').style.display = 'none';
   document.getElementById('captions').style.display = 'flex';
   document.getElementById('capLangName').textContent = lang.name;
+  capFeed.dir = RTL_LANGS.includes(lang.code) ? 'rtl' : 'ltr';
   connect(lang.code);
 }
 
 document.getElementById('changeBtn').addEventListener('click', () => {
+  manualClose = true;
   if (ws) ws.close();
   document.getElementById('captions').style.display = 'none';
   document.getElementById('picker').style.display = 'flex';
+  capFeed.innerHTML = '<div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div>';
 });
 
 function connect(langCode){
+  manualClose = false;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}?role=audience&session=${sessionCode}&lang=${langCode}`);
   const dot = document.getElementById('capDot');
   const statusText = document.getElementById('capStatusText');
-  const capText = document.getElementById('capText');
 
   ws.onopen = () => { dot.classList.add('live'); statusText.textContent = 'Connected — waiting for speech'; };
-  ws.onclose = () => { dot.classList.remove('live'); statusText.textContent = 'Disconnected — reconnecting…'; setTimeout(() => connect(langCode), 1500); };
+  ws.onclose = () => {
+    dot.classList.remove('live');
+    if (manualClose) return;
+    statusText.textContent = 'Disconnected — reconnecting…';
+    setTimeout(() => connect(langCode), 1500);
+  };
   ws.onmessage = (evt) => {
     const msg = JSON.parse(evt.data);
     if (msg.type === 'caption'){
-      capText.classList.remove('placeholder');
-      capText.textContent = msg.text;
+      addCaptionLine(msg.text);
       statusText.textContent = `Live — ${msg.latency}ms`;
     }
   };

@@ -60,7 +60,28 @@ function safeSend(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(payload);
 }
 
+function pruneSessionIfEmpty(code, session) {
+  if (session.speakers.size === 0 && session.audience.size === 0) sessions.delete(code);
+}
+
+// Phones lock their screens and networks blip without the socket ever
+// firing 'close' — ping every connection and terminate ones that stop
+// answering, so dead clients don't linger in the audience/speaker sets
+// and both ends detect the drop quickly enough to reconnect.
+const HEARTBEAT_INTERVAL_MS = 25000;
+function heartbeat() { this.isAlive = true; }
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, HEARTBEAT_INTERVAL_MS);
+
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', heartbeat);
+
   const url = new URL(req.url, `http://${req.headers.host}`);
   const role = url.searchParams.get('role') || 'audience';
   const sessionCode = (url.searchParams.get('session') || 'DEMO').toUpperCase();
@@ -94,7 +115,7 @@ wss.on('connection', (ws, req) => {
       }));
     });
 
-    ws.on('close', () => { session.speakers.delete(ws); });
+    ws.on('close', () => { session.speakers.delete(ws); pruneSessionIfEmpty(sessionCode, session); });
   } else {
     const lang = url.searchParams.get('lang') || 'en';
     session.audience.set(ws, { lang });
@@ -110,7 +131,11 @@ wss.on('connection', (ws, req) => {
       }
     });
 
-    ws.on('close', () => { session.audience.delete(ws); broadcastStats(session); });
+    ws.on('close', () => {
+      session.audience.delete(ws);
+      broadcastStats(session);
+      pruneSessionIfEmpty(sessionCode, session);
+    });
   }
 });
 
