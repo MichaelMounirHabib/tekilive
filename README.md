@@ -43,31 +43,40 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 |---|---|---|---|
 | `PORT` | no | `3000` | Port the server listens on (hosting platforms set this for you) |
 | `ALLOWED_ORIGINS` | no | *(empty = allow all)* | Comma-separated list of origins allowed to open a WebSocket connection, e.g. `https://tekilive.onrender.com` |
-| `AZURE_TRANSLATOR_KEY` | recommended | *(empty)* | Azure Translator API key. When set, this becomes the translation provider (see below) |
+| `DEEPL_API_KEY` | recommended | *(empty)* | DeepL API key. When set, this becomes the translation provider (see below) |
+| `AZURE_TRANSLATOR_KEY` | alternative | *(empty)* | Azure Translator API key, used only if no DeepL key is set |
 | `AZURE_TRANSLATOR_REGION` | with the key above | *(empty)* | Azure resource region, e.g. `eastus` |
-| `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the free MyMemory API (only used as a fallback when no Azure key is set) for a higher rate limit |
+| `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the free MyMemory API (only used as a last-resort fallback when no other provider is set) for a higher rate limit |
 
 Copy `.env.example` to `.env` for local runs if you want to set these; most
 hosting platforms let you set them directly in their dashboard instead.
 
 ### Translation provider
 
-`translate.js` picks Azure Translator when `AZURE_TRANSLATOR_KEY` is set,
-and falls back to the free MyMemory API otherwise. **The MyMemory fallback
-is for local development only** — its anonymous quota is small (and shared
-across whatever IP a request comes from, including other apps on the same
-cloud host), so it will hit "quota exhausted" errors under any real usage.
-For an actual deployment, get a free Azure Translator key:
+`translate.js` picks DeepL when `DEEPL_API_KEY` is set, Azure Translator
+when `AZURE_TRANSLATOR_KEY` is set instead, and falls back to the free
+MyMemory API otherwise. **The MyMemory fallback is for local development
+only** — its anonymous quota is small (and shared across whatever IP a
+request comes from, including other apps on the same cloud host), so it
+will hit "quota exhausted" errors under any real usage.
 
-1. [portal.azure.com](https://portal.azure.com) → **Create a resource** →
-   search **Translator** → create it on the **F0 (free)** pricing tier
-   (2 million characters/month free).
-2. Once created, open the resource → **Keys and Endpoint**, and copy **Key 1**
-   and the **Region**.
-3. Set `AZURE_TRANSLATOR_KEY` and `AZURE_TRANSLATOR_REGION` in your hosting
-   platform's environment variables.
+For an actual deployment, get a free DeepL API key:
 
-Swapping in a different provider (DeepL, Google Cloud Translation) later is
+1. [deepl.com/pro-api](https://www.deepl.com/en/pro-api) → sign up for
+   **DeepL API Free** (500,000 characters/month free; a card is required
+   at signup but isn't charged on the free plan).
+2. Once approved, find your key at
+   [deepl.com/your-account/keys](https://www.deepl.com/en/your-account/keys).
+   Free-tier keys end in `:fx` — `translate.js` uses that suffix to route
+   to the correct (free vs. pro) API host automatically.
+3. Set `DEEPL_API_KEY` in your hosting platform's environment variables.
+
+**Caveat:** DeepL doesn't support Hindi, one of the ten languages in this
+app's language list — selecting it as a target will error. Everything else
+(English, Arabic, French, Spanish, German, Chinese, Portuguese, Russian,
+Turkish) is supported.
+
+Swapping to a different provider (Google Cloud Translation, etc.) later is
 a one-file change — add another `translate<Provider>()` function in
 `translate.js` and branch to it in `translate()`.
 
@@ -101,7 +110,8 @@ straight from a GitHub repo with no extra config for a Node + WebSocket app.
    - **Start command:** `npm start`
    - **Health check path:** `/healthz`
 4. Leave `ALLOWED_ORIGINS` blank unless you want to lock the WebSocket down
-   to a specific domain later. Set `MYMEMORY_EMAIL` if you have one.
+   to a specific domain later. Set `DEEPL_API_KEY` (see Translation provider
+   above) so captions don't rely on the unreliable MyMemory fallback.
 5. Click **Create Web Service**. Render builds and deploys, and gives you a
    public URL like `https://tekilive.onrender.com` — HTTPS and WSS both work
    on it automatically, no extra config.
@@ -118,10 +128,11 @@ instance to avoid that for a live event.
 
 ## What's still a placeholder, worth flagging honestly in the pitch
 
-- **Translation engine:** Azure Translator in production (set
-  `AZURE_TRANSLATOR_KEY`), MyMemory as an unauthenticated local-dev fallback.
-  Isolated behind one function (`translate.js`), so swapping to DeepL or
-  Google Cloud Translation later is a one-file change.
+- **Translation engine:** DeepL in production (set `DEEPL_API_KEY`), with
+  Azure Translator as an alternative and MyMemory as an unauthenticated
+  local-dev fallback. Isolated behind one function (`translate.js`), so
+  swapping providers later is a one-file change. Note DeepL doesn't cover
+  Hindi — see the Translation provider section above.
 - **No persistence:** transcripts/captions aren't saved anywhere. Adding a
   session log would unlock a post-event transcript/summary deliverable.
 - **No auth on sessions:** anyone with the QR/URL can join a session. Fine

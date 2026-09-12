@@ -11,6 +11,8 @@ services:
         value: 20.11.0
       - key: ALLOWED_ORIGINS
         value: ""
+      - key: DEEPL_API_KEY
+        sync: false
       - key: MYMEMORY_EMAIL
         sync: false
       - key: AZURE_TRANSLATOR_KEY

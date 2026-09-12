@@ -1,18 +1,48 @@
 /**
  * Translation provider, isolated behind one function.
- * Swap in DeepL, Google Cloud Translation, etc. by changing this file
- * only — callers just await translate(text, source, target).
+ * Swap providers by changing this file only — callers just await
+ * translate(text, source, target).
  *
- * Uses Azure Translator when AZURE_TRANSLATOR_KEY is set (production);
- * falls back to the free MyMemory API otherwise (fine for local dev,
- * but its anonymous quota is small and shared across whatever IP the
- * request comes from — not reliable once actually deployed).
+ * Picks the first configured provider: DeepL, then Azure Translator,
+ * then falls back to the free MyMemory API (fine for local dev, but its
+ * anonymous quota is small and shared across whatever IP the request
+ * comes from — not reliable once actually deployed).
  */
 
+const DEEPL_API_KEY = process.env.DEEPL_API_KEY || '';
 const AZURE_KEY = process.env.AZURE_TRANSLATOR_KEY || '';
 const AZURE_REGION = process.env.AZURE_TRANSLATOR_REGION || '';
 const AZURE_ENDPOINT = process.env.AZURE_TRANSLATOR_ENDPOINT || 'https://api.cognitive.microsofttranslator.com';
 const MYMEMORY_EMAIL = process.env.MYMEMORY_EMAIL || '';
+
+// DeepL wants region-qualified codes for a couple of target languages our
+// language list keeps generic; a Free-tier key always ends in ':fx' and
+// must hit the separate free API host.
+const DEEPL_TARGET_LANG_MAP = { en: 'EN-US', pt: 'PT-PT' };
+
+async function translateDeepL(text, source, target) {
+  const endpoint = DEEPL_API_KEY.endsWith(':fx')
+    ? 'https://api-free.deepl.com/v2/translate'
+    : 'https://api.deepl.com/v2/translate';
+  const body = new URLSearchParams({
+    text,
+    source_lang: source.toUpperCase(),
+    target_lang: (DEEPL_TARGET_LANG_MAP[target] || target).toUpperCase(),
+  });
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `DeepL-Auth-Key ${DEEPL_API_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: body.toString(),
+  });
+  if (!res.ok) throw new Error(`DeepL error: ${res.status}`);
+  const data = await res.json();
+  const translated = data?.translations?.[0]?.text;
+  if (!translated) throw new Error('DeepL returned no translation');
+  return translated;
+}
 
 // Azure uses script-qualified codes for a few languages our language list
 // keeps generic (e.g. 'zh'); map only where they differ.
@@ -50,6 +80,7 @@ async function translateMyMemory(text, source, target) {
 
 async function translate(text, source, target) {
   if (source === target) return text;
+  if (DEEPL_API_KEY) return translateDeepL(text, source, target);
   if (AZURE_KEY) return translateAzure(text, source, target);
   return translateMyMemory(text, source, target);
 }
