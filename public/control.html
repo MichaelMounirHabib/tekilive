@@ -168,13 +168,18 @@ function setupQr(){
 sessionInput.addEventListener('change', setupQr);
 setupQr();
 
+const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
+let lastServerMessageAt = Date.now();
+
 function connectWs(){
   const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
-  ws.onopen = () => { statusText.textContent = 'Connected'; };
+  lastServerMessageAt = Date.now();
+  ws.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); };
   ws.onclose = () => { statusText.textContent = 'Disconnected — retrying…'; setTimeout(connectWs, 1500); };
   ws.onmessage = (evt) => {
+    lastServerMessageAt = Date.now();
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
     if (msg.type === 'delivered'){
@@ -185,6 +190,15 @@ function connectWs(){
   };
 }
 connectWs();
+
+// The server sends an app-level heartbeat every 12s regardless of caption
+// activity, so silence beyond that reliably means the socket is dead —
+// force a clean reconnect instead of waiting on readyState to catch up.
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && Date.now() - lastServerMessageAt > WS_STALE_TIMEOUT_MS){
+    ws.close();
+  }
+}, 5000);
 
 function renderStats(msg){
   totalCount.textContent = msg.totalAudience;

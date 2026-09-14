@@ -67,14 +67,21 @@ function pruneSessionIfEmpty(code, session) {
 // Phones lock their screens and networks blip without the socket ever
 // firing 'close' — ping every connection and terminate ones that stop
 // answering, so dead clients don't linger in the audience/speaker sets
-// and both ends detect the drop quickly enough to reconnect.
-const HEARTBEAT_INTERVAL_MS = 25000;
+// and both ends detect the drop quickly enough to reconnect. A protocol-
+// level ping/pong alone leaves a real gap: the client's readyState still
+// reads OPEN until the server gives up on it (up to two full intervals),
+// so a speaker's sentences can silently vanish into a half-dead socket
+// for a stretch that feels exactly like random lag. Sending an app-level
+// {type:'ping'} alongside it lets clients independently notice staleness
+// and reconnect on their own, without waiting on the server's cleanup.
+const HEARTBEAT_INTERVAL_MS = 12000;
 function heartbeat() { this.isAlive = true; }
 setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
     ws.isAlive = false;
     ws.ping();
+    safeSend(ws, '{"type":"ping"}');
   });
 }, HEARTBEAT_INTERVAL_MS);
 

@@ -187,10 +187,14 @@ document.getElementById('changeBtn').addEventListener('click', () => {
   capFeed.innerHTML = '<div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div>';
 });
 
+const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
+let lastServerMessageAt = Date.now(), staleWatchdog = null;
+
 function connect(langCode){
   manualClose = false;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}?role=audience&session=${sessionCode}&lang=${langCode}`);
+  lastServerMessageAt = Date.now();
   const dot = document.getElementById('capDot');
   const statusText = document.getElementById('capStatusText');
 
@@ -202,6 +206,7 @@ function connect(langCode){
     setTimeout(() => connect(langCode), 1500);
   };
   ws.onmessage = (evt) => {
+    lastServerMessageAt = Date.now();
     const msg = JSON.parse(evt.data);
     if (msg.type === 'caption'){
       addCaptionLine(msg.text);
@@ -209,6 +214,18 @@ function connect(langCode){
       statusText.textContent = `Live — ${msg.latency}ms`;
     }
   };
+
+  // The server sends an app-level heartbeat every 12s regardless of
+  // caption activity, so silence beyond that reliably means the socket
+  // is dead — force a clean reconnect instead of waiting on readyState
+  // to catch up (which can lag a genuinely dead connection by up to a
+  // minute and just silently drop captions in the meantime).
+  if (staleWatchdog) clearInterval(staleWatchdog);
+  staleWatchdog = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN && Date.now() - lastServerMessageAt > WS_STALE_TIMEOUT_MS){
+      ws.close();
+    }
+  }, 5000);
 }
 </script>
 </body>
