@@ -33,12 +33,18 @@
   .cap-actions{display:flex; gap:8px;}
   .change-btn{background:none; border:1px solid var(--border); color:var(--gray); font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:999px; cursor:pointer; white-space:nowrap;}
   .change-btn.voice-on{border-color:var(--violet); color:var(--white); background:rgba(124,58,237,.18);}
-  .cap-status{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--gray); margin-bottom:18px;}
+  .cap-status{display:flex; align-items:center; justify-content:space-between; gap:7px; font-size:12px; color:var(--gray); margin-bottom:14px;}
+  .cap-status-left{display:flex; align-items:center; gap:7px;}
   .dot{width:7px; height:7px; border-radius:50%; background:var(--gray);}
   .dot.live{background:#34D399;}
 
+  .textsize{display:flex; align-items:center; gap:6px;}
+  .size-btn{width:26px; height:26px; border-radius:7px; border:1px solid var(--border); background:var(--panel); color:var(--white); font-family:inherit; font-size:14px; font-weight:600; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;}
+  .size-btn:active{border-color:var(--violet); background:rgba(124,58,237,.14);}
+  .size-btn:disabled{opacity:.35; cursor:not-allowed;}
+
   .cap-feed{flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:14px; overflow-y:auto; scroll-behavior:smooth; -webkit-overflow-scrolling:touch;}
-  .cap-line{font-size:clamp(20px, 5.5vw, 28px); line-height:1.5; font-weight:500; opacity:1; animation:capIn .3s ease-out;}
+  .cap-line{font-size:calc(clamp(20px, 5.5vw, 28px) * var(--font-scale, 1)); line-height:1.5; font-weight:500; opacity:1; animation:capIn .3s ease-out;}
   .cap-line.placeholder{color:var(--gray); font-weight:400; font-size:16px; animation:none;}
   .cap-feed .cap-line:not(:last-child):nth-last-child(2){opacity:.55;}
   .cap-feed .cap-line:not(:last-child):not(:nth-last-child(2)){opacity:.3;}
@@ -68,7 +74,13 @@
       <button class="change-btn" id="changeBtn">Change language</button>
     </div>
   </div>
-  <div class="cap-status"><span class="dot" id="capDot"></span><span id="capStatusText">Connecting…</span></div>
+  <div class="cap-status">
+    <span class="cap-status-left"><span class="dot" id="capDot"></span><span id="capStatusText">Connecting…</span></span>
+    <span class="textsize">
+      <button class="size-btn" id="fontDecBtn" aria-label="Decrease text size">A−</button>
+      <button class="size-btn" id="fontIncBtn" aria-label="Increase text size">A+</button>
+    </span>
+  </div>
   <div class="cap-feed" id="capFeed"><div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div></div>
 </div>
 
@@ -119,6 +131,36 @@ function addCaptionLine(text){
 }
 
 const RTL_LANGS = ['ar'];
+
+// Caption text size, adjustable per viewer and remembered on this device.
+const FONT_SCALE_MIN = 0.75;
+const FONT_SCALE_MAX = 1.75;
+const FONT_SCALE_STEP = 0.125;
+const FONT_SCALE_STORAGE_KEY = 'tekilive-font-scale';
+const fontDecBtn = document.getElementById('fontDecBtn');
+const fontIncBtn = document.getElementById('fontIncBtn');
+let fontScale = 1;
+try {
+  const saved = parseFloat(localStorage.getItem(FONT_SCALE_STORAGE_KEY));
+  if (!isNaN(saved) && saved >= FONT_SCALE_MIN && saved <= FONT_SCALE_MAX) fontScale = saved;
+} catch (e) {}
+
+function applyFontScale(){
+  document.documentElement.style.setProperty('--font-scale', fontScale);
+  fontDecBtn.disabled = fontScale <= FONT_SCALE_MIN;
+  fontIncBtn.disabled = fontScale >= FONT_SCALE_MAX;
+  try { localStorage.setItem(FONT_SCALE_STORAGE_KEY, fontScale); } catch (e) {}
+}
+applyFontScale();
+
+fontDecBtn.addEventListener('click', () => {
+  fontScale = Math.max(FONT_SCALE_MIN, +(fontScale - FONT_SCALE_STEP).toFixed(3));
+  applyFontScale();
+});
+fontIncBtn.addEventListener('click', () => {
+  fontScale = Math.min(FONT_SCALE_MAX, +(fontScale + FONT_SCALE_STEP).toFixed(3));
+  applyFontScale();
+});
 
 // Voice reads captions aloud via the device's own speech synthesis — no
 // server round trip, no API key. Off by default: auto-playing audio from
