@@ -31,6 +31,9 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 - Sessions are isolated by a short code (`?session=DEMO`), so one deployment
   already supports multiple concurrent panels/tracks at once — give each
   panel its own code.
+- Each session carries its own event/organizer branding (name + logo),
+  uploaded by the presenter and shown to that session's attendees — see
+  Branding below.
 
 ## Requirements
 
@@ -82,6 +85,31 @@ Turkish) is supported.
 Swapping to a different provider (Google Cloud Translation, etc.) later is
 a one-file change — add another `translate<Provider>()` function in
 `translate.js` and branch to it in `translate()`.
+
+## Branding
+
+Two layers, both visible on the presenter console, the audience language
+picker, and the audience caption screen:
+
+- **TekiMinds** — a static, always-on brand mark on every page. Drop the
+  logo file at `public/branding/tekiminds-logo.png` and it takes over from
+  the placeholder "TL" mark automatically (all three pages fall back to the
+  placeholder gracefully if that file is missing, so nothing breaks before
+  it's added).
+- **Event + organizer branding** — set per session, not global. On the
+  presenter console, fill in the event name / organizer name and upload
+  their logos (2MB max each, any common image format) under "Event
+  branding," then **Save branding**. It's fanned out live over the existing
+  WebSocket to every attendee already connected (no reload needed), and
+  future joiners pick it up from `GET /api/session/:code/branding` before
+  they even pick a language.
+
+Branding lives in memory on the session, like everything else in this
+app — no cloud storage account needed — but it survives the *normal* churn
+of a live event: a presenter's browser refreshing, or a lull with zero
+attendees connected, no longer wipes it out (only true server restarts do,
+same as every other piece of session state — see "no persistence" below).
+Set it once, shortly before the event starts.
 
 ## Run it locally
 
@@ -156,7 +184,10 @@ beforehand so it never sleeps.
   local-dev fallback. Isolated behind one function (`translate.js`), so
   swapping providers later is a one-file change. Note DeepL doesn't cover
   Hindi — see the Translation provider section above.
-- **No persistence:** transcripts/captions aren't saved anywhere. Adding a
-  session log would unlock a post-event transcript/summary deliverable.
+- **No persistence:** transcripts/captions/branding aren't saved anywhere
+  durable — a server restart or redeploy loses them, same as the rest of
+  session state. Fine for a single scheduled event set up shortly
+  beforehand; adding a real datastore would unlock branding (and a
+  post-event transcript/summary deliverable) surviving restarts.
 - **No auth on sessions:** anyone with the QR/URL can join a session. Fine
   for an open panel, worth adding a passcode for anything private.

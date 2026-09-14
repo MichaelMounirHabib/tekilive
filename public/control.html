@@ -15,7 +15,9 @@
   .wrap{max-width:1120px; margin:0 auto; padding:32px 24px 64px;}
   header{display:flex; align-items:center; justify-content:space-between; padding-bottom:24px; border-bottom:1px solid var(--border); margin-bottom:24px; flex-wrap:wrap; gap:16px;}
   .brand{display:flex; align-items:center; gap:12px;}
-  .brand-mark{width:34px; height:34px; border-radius:9px; background:linear-gradient(135deg, var(--violet), var(--blue)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px;}
+  .brand-mark{width:34px; height:34px; border-radius:9px; background:linear-gradient(135deg, var(--violet), var(--blue)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px; overflow:hidden; flex-shrink:0;}
+  .brand-mark.small{width:20px; height:20px; border-radius:6px; font-size:9px;}
+  .brand-mark img{width:100%; height:100%; object-fit:contain; display:none; background:#fff;}
   .brand-name{font-size:18px; font-weight:600;}
   .brand-sub{font-size:12.5px; color:var(--gray); margin-top:1px;}
   .status-pill{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--gray); border:1px solid var(--border); padding:7px 14px; border-radius:999px;}
@@ -49,13 +51,30 @@
   .qr-url{font-size:12.5px; color:var(--gray); word-break:break-all;}
 
   .session-badge{font-size:12.5px; color:var(--sky); font-weight:600;}
+
+  .branding-grid{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .branding-grid + .branding-grid{margin-top:14px;}
+  @media (max-width:900px){ .branding-grid{grid-template-columns:1fr;} }
+  .logo-upload{display:flex; align-items:center; gap:10px;}
+  .logo-preview{width:38px; height:38px; border-radius:8px; object-fit:contain; background:#fff; padding:4px; display:none; flex-shrink:0;}
+  .save-row{display:flex; align-items:center; gap:14px; margin-top:16px;}
+  .branding-status{font-size:12.5px; color:var(--gray);}
+  .branding-status.error{color:#F59E0B;}
+
+  .teki-footer{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; padding-top:20px; margin-top:32px; border-top:1px solid var(--border); font-size:12px; color:var(--gray);}
+  .teki-footer-brand{display:flex; align-items:center; gap:8px;}
+  .teki-footer-event{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .footer-logo{height:20px; width:auto; max-width:60px; object-fit:contain; background:#fff; border-radius:3px; padding:2px;}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <div class="brand">
-      <div class="brand-mark">TL</div>
+      <div class="brand-mark">
+        <span>TL</span>
+        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
+      </div>
       <div>
         <div class="brand-name">TekiLive</div>
         <div class="brand-sub">Presenter console — Phase 2 (multi-device)</div>
@@ -79,6 +98,40 @@
   </div>
   <div id="micWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
 
+  <div class="panel" style="margin-bottom:24px;">
+    <div class="panel-title">Event branding — shown to your audience</div>
+    <div class="branding-grid">
+      <div>
+        <label for="eventNameInput">Event name</label>
+        <input id="eventNameInput" placeholder="e.g. AI Summit 2026" maxlength="120">
+      </div>
+      <div>
+        <label for="orgNameInput">Organizing company</label>
+        <input id="orgNameInput" placeholder="e.g. TekiMinds Events" maxlength="120">
+      </div>
+    </div>
+    <div class="branding-grid">
+      <div>
+        <label for="eventLogoInput">Event logo</label>
+        <div class="logo-upload">
+          <img class="logo-preview" id="eventLogoPreview" alt="">
+          <input type="file" id="eventLogoInput" accept="image/*">
+        </div>
+      </div>
+      <div>
+        <label for="orgLogoInput">Organizer logo</label>
+        <div class="logo-upload">
+          <img class="logo-preview" id="orgLogoPreview" alt="">
+          <input type="file" id="orgLogoInput" accept="image/*">
+        </div>
+      </div>
+    </div>
+    <div class="save-row">
+      <button class="gradient-btn" id="saveBrandingBtn">Save branding</button>
+      <span class="branding-status" id="brandingStatus"></span>
+    </div>
+  </div>
+
   <div class="grid">
     <div class="panel">
       <div class="panel-title">Original — live transcript</div>
@@ -99,6 +152,22 @@
       </div>
     </div>
   </div>
+
+  <footer class="teki-footer">
+    <div class="teki-footer-brand">
+      <div class="brand-mark small">
+        <span>TL</span>
+        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
+      </div>
+      <span>Powered by TekiMinds</span>
+    </div>
+    <div class="teki-footer-event" id="footerEventBranding" style="display:none;">
+      <img class="footer-logo" id="footerEventLogo" style="display:none;" alt="">
+      <span id="footerEventName"></span>
+      <img class="footer-logo" id="footerOrgLogo" style="display:none;" alt="">
+      <span id="footerOrgName"></span>
+    </div>
+  </footer>
 </div>
 
 <script>
@@ -168,6 +237,78 @@ function setupQr(){
 sessionInput.addEventListener('change', setupQr);
 setupQr();
 
+const eventNameInput = document.getElementById('eventNameInput');
+const orgNameInput = document.getElementById('orgNameInput');
+const eventLogoInput = document.getElementById('eventLogoInput');
+const orgLogoInput = document.getElementById('orgLogoInput');
+const eventLogoPreview = document.getElementById('eventLogoPreview');
+const orgLogoPreview = document.getElementById('orgLogoPreview');
+const saveBrandingBtn = document.getElementById('saveBrandingBtn');
+const brandingStatus = document.getElementById('brandingStatus');
+const footerEventBranding = document.getElementById('footerEventBranding');
+const footerEventLogo = document.getElementById('footerEventLogo');
+const footerEventName = document.getElementById('footerEventName');
+const footerOrgLogo = document.getElementById('footerOrgLogo');
+const footerOrgName = document.getElementById('footerOrgName');
+
+function currentSessionCode(){
+  return sessionInput.value.trim().toUpperCase() || 'DEMO';
+}
+
+function showLogoPreview(imgEl, src){
+  if (src){ imgEl.src = src; imgEl.style.display = 'block'; }
+  else { imgEl.style.display = 'none'; imgEl.removeAttribute('src'); }
+}
+
+function renderBranding(b){
+  eventNameInput.value = b.eventName || '';
+  orgNameInput.value = b.orgName || '';
+  const code = currentSessionCode();
+  const bust = Date.now();
+  showLogoPreview(eventLogoPreview, b.hasEventLogo ? `/api/session/${code}/logo/event?t=${bust}` : null);
+  showLogoPreview(orgLogoPreview, b.hasOrgLogo ? `/api/session/${code}/logo/org?t=${bust}` : null);
+
+  const hasAny = b.eventName || b.orgName || b.hasEventLogo || b.hasOrgLogo;
+  footerEventBranding.style.display = hasAny ? 'flex' : 'none';
+  footerEventName.textContent = b.eventName || '';
+  footerOrgName.textContent = b.orgName || '';
+  showLogoPreview(footerEventLogo, b.hasEventLogo ? `/api/session/${code}/logo/event?t=${bust}` : null);
+  showLogoPreview(footerOrgLogo, b.hasOrgLogo ? `/api/session/${code}/logo/org?t=${bust}` : null);
+}
+
+async function loadBranding(){
+  try {
+    const res = await fetch(`/api/session/${currentSessionCode()}/branding`);
+    if (res.ok) renderBranding(await res.json());
+  } catch (e) {}
+}
+sessionInput.addEventListener('change', loadBranding);
+loadBranding();
+
+saveBrandingBtn.addEventListener('click', async () => {
+  const form = new FormData();
+  form.set('eventName', eventNameInput.value.trim());
+  form.set('orgName', orgNameInput.value.trim());
+  if (eventLogoInput.files[0]) form.set('eventLogo', eventLogoInput.files[0]);
+  if (orgLogoInput.files[0]) form.set('orgLogo', orgLogoInput.files[0]);
+  saveBrandingBtn.disabled = true;
+  brandingStatus.textContent = 'Saving…';
+  brandingStatus.classList.remove('error');
+  try {
+    const res = await fetch(`/api/session/${currentSessionCode()}/branding`, { method: 'POST', body: form });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Save failed');
+    renderBranding(await res.json());
+    eventLogoInput.value = '';
+    orgLogoInput.value = '';
+    brandingStatus.textContent = 'Saved';
+  } catch (e) {
+    brandingStatus.textContent = 'Save failed — try an image under 2MB';
+    brandingStatus.classList.add('error');
+  } finally {
+    saveBrandingBtn.disabled = false;
+  }
+});
+
 const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
 let lastServerMessageAt = Date.now();
 
@@ -182,6 +323,8 @@ function connectWs(){
     lastServerMessageAt = Date.now();
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
+    if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
+    if (msg.type === 'branding') renderBranding(msg.branding);
     if (msg.type === 'delivered'){
       const el = document.getElementById('latencyValue');
       el.textContent = `${msg.latency}ms`;

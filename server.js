@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const multer = require('multer');
 const { WebSocketServer } = require('ws');
 const { translate } = require('./translate');
 
@@ -13,6 +14,60 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.status(200).send('ok'));
+
+// Event/organizer logos, uploaded per session. Stored in memory on the
+// session object (like everything else here) rather than a cloud storage
+// service — no new account/infra needed, and it matches the app's existing
+// no-persistence lifecycle: branding lives as long as the session does.
+const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: LOGO_MAX_BYTES },
+  fileFilter(req, file, cb) {
+    cb(null, file.mimetype.startsWith('image/'));
+  },
+}).fields([{ name: 'eventLogo', maxCount: 1 }, { name: 'orgLogo', maxCount: 1 }]);
+
+function brandingMeta(session) {
+  return {
+    eventName: session.branding.eventName,
+    orgName: session.branding.orgName,
+    hasEventLogo: !!session.branding.eventLogo,
+    hasOrgLogo: !!session.branding.orgLogo,
+  };
+}
+
+app.get('/api/session/:code/branding', (req, res) => {
+  const session = getSession(req.params.code.toUpperCase());
+  res.json(brandingMeta(session));
+});
+
+app.post('/api/session/:code/branding', (req, res) => {
+  upload(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    const session = getSession(req.params.code.toUpperCase());
+    if (typeof req.body.eventName === 'string') session.branding.eventName = req.body.eventName.slice(0, 120);
+    if (typeof req.body.orgName === 'string') session.branding.orgName = req.body.orgName.slice(0, 120);
+    const eventFile = req.files?.eventLogo?.[0];
+    const orgFile = req.files?.orgLogo?.[0];
+    if (eventFile) session.branding.eventLogo = { mime: eventFile.mimetype, data: eventFile.buffer };
+    if (orgFile) session.branding.orgLogo = { mime: orgFile.mimetype, data: orgFile.buffer };
+    const meta = brandingMeta(session);
+    const payload = JSON.stringify({ type: 'branding', branding: meta });
+    session.speakers.forEach(s => safeSend(s, payload));
+    session.audience.forEach((clientMeta, client) => safeSend(client, payload));
+    res.json(meta);
+  });
+});
+
+app.get('/api/session/:code/logo/:kind', (req, res) => {
+  const session = getSession(req.params.code.toUpperCase());
+  const logo = req.params.kind === 'org' ? session.branding.orgLogo : req.params.kind === 'event' ? session.branding.eventLogo : null;
+  if (!logo) return res.status(404).end();
+  res.set('Content-Type', logo.mime);
+  res.set('Cache-Control', 'no-store');
+  res.send(logo.data);
+});
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({
@@ -28,13 +83,18 @@ const wss = new WebSocketServer({
  * sessions: Map<sessionCode, {
  *   speakers: Set<ws>,
  *   audience: Map<ws, { lang }>,
+ *   branding: { eventName, orgName, eventLogo: {mime,data}|null, orgLogo: {mime,data}|null },
  * }>
  */
 const sessions = new Map();
 
 function getSession(code) {
   if (!sessions.has(code)) {
-    sessions.set(code, { speakers: new Set(), audience: new Map() });
+    sessions.set(code, {
+      speakers: new Set(),
+      audience: new Map(),
+      branding: { eventName: '', orgName: '', eventLogo: null, orgLogo: null },
+    });
   }
   return sessions.get(code);
 }
@@ -60,8 +120,19 @@ function safeSend(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(payload);
 }
 
+function sessionHasBranding(session) {
+  const b = session.branding;
+  return !!(b.eventName || b.orgName || b.eventLogo || b.orgLogo);
+}
+
+// Once a presenter has set branding for a session code, treat it as
+// configured for the event rather than transient — a presenter briefly
+// reloading their console, or a lull with zero attendees connected,
+// shouldn't silently wipe out logos/names they already uploaded.
 function pruneSessionIfEmpty(code, session) {
-  if (session.speakers.size === 0 && session.audience.size === 0) sessions.delete(code);
+  if (session.speakers.size === 0 && session.audience.size === 0 && !sessionHasBranding(session)) {
+    sessions.delete(code);
+  }
 }
 
 // Phones lock their screens and networks blip without the socket ever
@@ -96,7 +167,7 @@ wss.on('connection', (ws, req) => {
 
   if (role === 'speaker') {
     session.speakers.add(ws);
-    safeSend(ws, JSON.stringify({ type: 'joined', role: 'speaker', session: sessionCode }));
+    safeSend(ws, JSON.stringify({ type: 'joined', role: 'speaker', session: sessionCode, branding: brandingMeta(session) }));
     broadcastStats(session);
 
     ws.on('message', async (raw) => {
@@ -126,7 +197,7 @@ wss.on('connection', (ws, req) => {
   } else {
     const lang = url.searchParams.get('lang') || 'en';
     session.audience.set(ws, { lang });
-    safeSend(ws, JSON.stringify({ type: 'joined', role: 'audience', session: sessionCode, lang }));
+    safeSend(ws, JSON.stringify({ type: 'joined', role: 'audience', session: sessionCode, lang, branding: brandingMeta(session) }));
     broadcastStats(session);
 
     ws.on('message', (raw) => {
