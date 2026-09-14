@@ -37,7 +37,7 @@ async function translateDeepL(text, source, target) {
     },
     body: body.toString(),
   });
-  if (!res.ok) throw new Error(`DeepL error: ${res.status}`);
+  if (!res.ok) throw new Error(`DeepL error ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const translated = data?.translations?.[0]?.text;
   if (!translated) throw new Error('DeepL returned no translation');
@@ -61,7 +61,7 @@ async function translateAzure(text, source, target) {
     },
     body: JSON.stringify([{ Text: text }]),
   });
-  if (!res.ok) throw new Error(`Azure Translator error: ${res.status}`);
+  if (!res.ok) throw new Error(`Azure Translator error ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const translated = data?.[0]?.translations?.[0]?.text;
   if (!translated) throw new Error('Azure Translator returned no translation');
@@ -84,5 +84,8 @@ async function translate(text, source, target) {
   if (AZURE_KEY) return translateAzure(text, source, target);
   return translateMyMemory(text, source, target);
 }
+
+const activeProvider = DEEPL_API_KEY ? 'DeepL' : AZURE_KEY ? 'Azure Translator' : 'MyMemory (unreliable fallback — set DEEPL_API_KEY)';
+console.log(`[translate.js] Active translation provider: ${activeProvider}`);
 
 module.exports = { translate };

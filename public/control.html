@@ -311,15 +311,26 @@ saveBrandingBtn.addEventListener('click', async () => {
 
 const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
 let lastServerMessageAt = Date.now();
+let connectedCode = null;
 
 function connectWs(){
   const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
+  connectedCode = code;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
+  const socket = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
+  ws = socket;
   lastServerMessageAt = Date.now();
-  ws.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); };
-  ws.onclose = () => { statusText.textContent = 'Disconnected — retrying…'; setTimeout(connectWs, 1500); };
-  ws.onmessage = (evt) => {
+  socket.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); };
+  socket.onclose = () => {
+    // Flag lives on the socket itself, not a shared variable — closing this
+    // socket to reconnect elsewhere must not race with the *new* socket's
+    // own state (a shared flag reset by connectWs() before this fires would
+    // let this stale handler schedule a duplicate reconnect anyway).
+    if (socket.manualClose) return;
+    statusText.textContent = 'Disconnected — retrying…';
+    setTimeout(connectWs, 1500);
+  };
+  socket.onmessage = (evt) => {
     lastServerMessageAt = Date.now();
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
@@ -333,6 +344,17 @@ function connectWs(){
   };
 }
 connectWs();
+
+// The mic feed must follow the session code shown on screen (and encoded
+// in the QR code) — without this, changing the code after page load left
+// the speaker socket silently pinned to whatever code was there at
+// connect time, so transcripts went to a session nobody was listening in.
+sessionInput.addEventListener('change', () => {
+  const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
+  if (code === connectedCode) return;
+  if (ws) { ws.manualClose = true; ws.close(); }
+  connectWs();
+});
 
 // The server sends an app-level heartbeat every 12s regardless of caption
 // activity, so silence beyond that reliably means the socket is dead —

@@ -43,9 +43,13 @@ app.get('/api/session/:code/branding', (req, res) => {
 });
 
 app.post('/api/session/:code/branding', (req, res) => {
+  const code = req.params.code.toUpperCase();
   upload(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message });
-    const session = getSession(req.params.code.toUpperCase());
+    if (err) {
+      log(`[${code}] branding upload rejected:`, err.message);
+      return res.status(400).json({ error: err.message });
+    }
+    const session = getSession(code);
     if (typeof req.body.eventName === 'string') session.branding.eventName = req.body.eventName.slice(0, 120);
     if (typeof req.body.orgName === 'string') session.branding.orgName = req.body.orgName.slice(0, 120);
     const eventFile = req.files?.eventLogo?.[0];
@@ -53,6 +57,7 @@ app.post('/api/session/:code/branding', (req, res) => {
     if (eventFile) session.branding.eventLogo = { mime: eventFile.mimetype, data: eventFile.buffer };
     if (orgFile) session.branding.orgLogo = { mime: orgFile.mimetype, data: orgFile.buffer };
     const meta = brandingMeta(session);
+    log(`[${code}] branding updated:`, meta);
     const payload = JSON.stringify({ type: 'branding', branding: meta });
     session.speakers.forEach(s => safeSend(s, payload));
     session.audience.forEach((clientMeta, client) => safeSend(client, payload));
@@ -120,6 +125,10 @@ function safeSend(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(payload);
 }
 
+function log(...args) {
+  console.log(`[${new Date().toISOString()}]`, ...args);
+}
+
 function sessionHasBranding(session) {
   const b = session.branding;
   return !!(b.eventName || b.orgName || b.eventLogo || b.orgLogo);
@@ -167,6 +176,7 @@ wss.on('connection', (ws, req) => {
 
   if (role === 'speaker') {
     session.speakers.add(ws);
+    log(`[${sessionCode}] speaker connected (speakers=${session.speakers.size}, audience=${session.audience.size})`);
     safeSend(ws, JSON.stringify({ type: 'joined', role: 'speaker', session: sessionCode, branding: brandingMeta(session) }));
     broadcastStats(session);
 
@@ -178,25 +188,36 @@ wss.on('connection', (ws, req) => {
       const { text, srcLang } = msg;
       const start = Date.now();
       const langs = activeLanguages(session);
-      if (langs.length === 0) return;
+      log(`[${sessionCode}] final_transcript (${text.length} chars, srcLang=${srcLang}) — active target languages: [${langs.join(', ') || 'none'}], audience=${session.audience.size}`);
+      if (langs.length === 0) {
+        log(`[${sessionCode}] no audience listening in any language yet — nothing to translate`);
+        return;
+      }
 
       await Promise.all(langs.map(async (lang) => {
         try {
           const translated = await translate(text, srcLang, lang);
           const latency = Date.now() - start;
+          log(`[${sessionCode}] translated ${srcLang}->${lang} in ${latency}ms: "${translated.slice(0, 60)}"`);
           const payload = JSON.stringify({ type: 'caption', lang, text: translated, latency, ts: Date.now() });
           session.audience.forEach((meta, client) => { if (meta.lang === lang) safeSend(client, payload); });
           session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'delivered', lang, text: translated, latency })));
         } catch (err) {
+          log(`[${sessionCode}] TRANSLATION FAILED ${srcLang}->${lang}:`, err && err.stack ? err.stack : err);
           session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message: 'translation failed' })));
         }
       }));
     });
 
-    ws.on('close', () => { session.speakers.delete(ws); pruneSessionIfEmpty(sessionCode, session); });
+    ws.on('close', () => {
+      session.speakers.delete(ws);
+      log(`[${sessionCode}] speaker disconnected (speakers=${session.speakers.size})`);
+      pruneSessionIfEmpty(sessionCode, session);
+    });
   } else {
     const lang = url.searchParams.get('lang') || 'en';
     session.audience.set(ws, { lang });
+    log(`[${sessionCode}] audience joined (lang=${lang}, audience=${session.audience.size})`);
     safeSend(ws, JSON.stringify({ type: 'joined', role: 'audience', session: sessionCode, lang, branding: brandingMeta(session) }));
     broadcastStats(session);
 
@@ -204,6 +225,7 @@ wss.on('connection', (ws, req) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       if (msg.type === 'set_lang') {
+        log(`[${sessionCode}] audience changed language to ${msg.lang}`);
         session.audience.set(ws, { lang: msg.lang });
         broadcastStats(session);
       }
@@ -211,6 +233,7 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => {
       session.audience.delete(ws);
+      log(`[${sessionCode}] audience left (audience=${session.audience.size})`);
       broadcastStats(session);
       pruneSessionIfEmpty(sessionCode, session);
     });
