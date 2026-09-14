@@ -22,6 +22,9 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
   translated into that language.
 - Attendees join by scanning a QR code (or opening the join link directly)
   with their own phone. No app install.
+- Attendees can also opt into hearing captions read aloud (a "Voice" toggle,
+  off by default) using the phone's own on-device speech synthesis — no
+  server round trip or additional API/account, so pair it with headphones.
 - The presenter console shows a live audience count broken down by language,
   and live translation latency — both are things worth showing a client in
   the room.

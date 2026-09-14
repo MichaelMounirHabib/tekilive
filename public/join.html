@@ -28,9 +28,11 @@
 
   /* ---- Caption screen ---- */
   #captions{display:none; height:100vh; flex-direction:column; padding:26px 22px;}
-  .cap-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .cap-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:10px;}
   .cap-lang{font-size:13px; color:var(--sky); font-weight:600;}
-  .change-btn{background:none; border:1px solid var(--border); color:var(--gray); font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:999px; cursor:pointer;}
+  .cap-actions{display:flex; gap:8px;}
+  .change-btn{background:none; border:1px solid var(--border); color:var(--gray); font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:999px; cursor:pointer; white-space:nowrap;}
+  .change-btn.voice-on{border-color:var(--violet); color:var(--white); background:rgba(124,58,237,.18);}
   .cap-status{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--gray); margin-bottom:18px;}
   .dot{width:7px; height:7px; border-radius:50%; background:var(--gray);}
   .dot.live{background:#34D399;}
@@ -54,14 +56,17 @@
     </div>
   </div>
   <h1>Choose your language</h1>
-  <div class="lede">Live captions from the stage, translated for you in real time.</div>
+  <div class="lede">Live captions from the stage, translated for you in real time. Read them on screen, or turn on voice afterward to hear them through headphones.</div>
   <div class="lang-grid" id="langGrid"></div>
 </div>
 
 <div id="captions">
   <div class="cap-top">
     <span class="cap-lang" id="capLangName"></span>
-    <button class="change-btn" id="changeBtn">Change language</button>
+    <div class="cap-actions">
+      <button class="change-btn" id="voiceBtn">Voice: off</button>
+      <button class="change-btn" id="changeBtn">Change language</button>
+    </div>
   </div>
   <div class="cap-status"><span class="dot" id="capDot"></span><span id="capStatusText">Connecting…</span></div>
   <div class="cap-feed" id="capFeed"><div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div></div>
@@ -69,10 +74,16 @@
 
 <script>
 const LANGUAGES = [
-  { code:'en', name:'English' }, { code:'ar', name:'Arabic' }, { code:'fr', name:'French' },
-  { code:'es', name:'Spanish' }, { code:'de', name:'German' }, { code:'zh', name:'Chinese' },
-  { code:'pt', name:'Portuguese' }, { code:'ru', name:'Russian' }, { code:'hi', name:'Hindi' },
-  { code:'tr', name:'Turkish' },
+  { code:'en', name:'English',    speech:'en-US' },
+  { code:'ar', name:'Arabic',     speech:'ar-SA' },
+  { code:'fr', name:'French',     speech:'fr-FR' },
+  { code:'es', name:'Spanish',    speech:'es-ES' },
+  { code:'de', name:'German',     speech:'de-DE' },
+  { code:'zh', name:'Chinese',    speech:'zh-CN' },
+  { code:'pt', name:'Portuguese', speech:'pt-PT' },
+  { code:'ru', name:'Russian',    speech:'ru-RU' },
+  { code:'hi', name:'Hindi',      speech:'hi-IN' },
+  { code:'tr', name:'Turkish',    speech:'tr-TR' },
 ];
 
 const params = new URLSearchParams(location.search);
@@ -109,18 +120,50 @@ function addCaptionLine(text){
 
 const RTL_LANGS = ['ar'];
 
+// Voice reads captions aloud via the device's own speech synthesis — no
+// server round trip, no API key. Off by default: auto-playing audio from
+// a phone speaker in a quiet room would be disruptive, so this is an
+// explicit opt-in for someone with headphones in.
+const SPEECH_SUPPORTED = 'speechSynthesis' in window;
+const MAX_QUEUED_UTTERANCES = 3;
+const voiceBtn = document.getElementById('voiceBtn');
+let voiceEnabled = false, speechLocale = 'en-US', queuedUtterances = 0;
+
+if (!SPEECH_SUPPORTED) voiceBtn.style.display = 'none';
+
+function speakCaption(text){
+  if (!voiceEnabled || !SPEECH_SUPPORTED) return;
+  if (queuedUtterances >= MAX_QUEUED_UTTERANCES) return; // falling behind — stay live rather than read a growing backlog
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = speechLocale;
+  queuedUtterances++;
+  utter.onend = utter.onerror = () => { queuedUtterances = Math.max(0, queuedUtterances - 1); };
+  speechSynthesis.speak(utter);
+}
+
+function setVoiceEnabled(on){
+  voiceEnabled = on;
+  voiceBtn.textContent = on ? 'Voice: on' : 'Voice: off';
+  voiceBtn.classList.toggle('voice-on', on);
+  if (!on && SPEECH_SUPPORTED){ speechSynthesis.cancel(); queuedUtterances = 0; }
+}
+
+voiceBtn.addEventListener('click', () => setVoiceEnabled(!voiceEnabled));
+
 let ws = null, manualClose = false;
 function joinAs(lang){
   document.getElementById('picker').style.display = 'none';
   document.getElementById('captions').style.display = 'flex';
   document.getElementById('capLangName').textContent = lang.name;
   capFeed.dir = RTL_LANGS.includes(lang.code) ? 'rtl' : 'ltr';
+  speechLocale = lang.speech;
   connect(lang.code);
 }
 
 document.getElementById('changeBtn').addEventListener('click', () => {
   manualClose = true;
   if (ws) ws.close();
+  setVoiceEnabled(false);
   document.getElementById('captions').style.display = 'none';
   document.getElementById('picker').style.display = 'flex';
   capFeed.innerHTML = '<div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div>';
@@ -144,6 +187,7 @@ function connect(langCode){
     const msg = JSON.parse(evt.data);
     if (msg.type === 'caption'){
       addCaptionLine(msg.text);
+      speakCaption(msg.text);
       statusText.textContent = `Live — ${msg.latency}ms`;
     }
   };
