@@ -103,31 +103,51 @@ serverless platforms, which drop long-lived WebSocket connections), it
 provisions HTTPS/WSS automatically on a real public URL, and it deploys
 straight from a GitHub repo with no extra config for a Node + WebSocket app.
 
+**Pick a region close to your actual audience, not just the default.**
+Render's region is fixed at creation (changing it later means creating a
+new service). DeepL's API is EU-based, so for an EMEA audience Frankfurt
+measured roughly half the latency of the US-West default — 140-190ms per
+translation call there vs. 300-380ms from Oregon, end to end. For a US
+audience, Ohio/Virginia/Oregon are all fine; for APAC, Singapore is closer
+to attendees but translation calls still cross to DeepL's EU servers either
+way.
+
 1. Push this project to a GitHub repository.
 2. Go to [dashboard.render.com](https://dashboard.render.com) → **New** →
-   **Web Service**, and connect the GitHub repo.
+   **Web Service**, and connect the GitHub repo. (If your Render account's
+   connected GitHub identity differs from the one that owns this repo, use
+   the **Public Git Repository** option instead and paste the repo's HTTPS
+   URL — this works for a public repo without linking accounts, but loses
+   auto-deploy-on-push; redeploy manually from the dashboard after each
+   push, or reconnect the matching GitHub account later to restore it.)
 3. Render should auto-detect the `render.yaml` in this repo (a "Blueprint")
-   and pre-fill the service. If it doesn't, configure manually:
+   and pre-fill the service — this only works with the GitHub-connected
+   path. Via the public-repo-URL path, configure manually instead:
    - **Runtime:** Node
+   - **Region:** whichever is closest to your audience (see above)
    - **Build command:** `npm install`
    - **Start command:** `npm start`
    - **Health check path:** `/healthz`
 4. Leave `ALLOWED_ORIGINS` blank unless you want to lock the WebSocket down
    to a specific domain later. Set `DEEPL_API_KEY` (see Translation provider
    above) so captions don't rely on the unreliable MyMemory fallback.
-5. Click **Create Web Service**. Render builds and deploys, and gives you a
-   public URL like `https://tekilive.onrender.com` — HTTPS and WSS both work
-   on it automatically, no extra config.
-6. Open `https://tekilive.onrender.com/control.html` on your laptop (start
-   listening, pick a session code) and `https://tekilive.onrender.com/join.html?session=<code>`
+5. Deploy. Render builds and gives you a public URL like
+   `https://<service-name>.onrender.com` — HTTPS and WSS both work on it
+   automatically, no extra config. Note the `.onrender.com` subdomain is
+   fixed to whatever name you gave the service at creation — renaming the
+   service later changes its display name only, not the URL.
+6. Open `https://<your-url>/control.html` on your laptop (start listening,
+   pick a session code) and `https://<your-url>/join.html?session=<code>`
    — or the QR code shown on the presenter console — on a phone. Test the
    phone **on cellular data, not the same WiFi**, since that's the actual
    requirement this refactor is meant to satisfy.
 
-Free-tier Render services spin down after inactivity and take ~30-60s to
-wake on the next request — fine for a scheduled demo, worth knowing if the
-presenter console feels slow to connect after idling. Upgrade to a paid
-instance to avoid that for a live event.
+**Free-tier instances spin down after ~15 minutes of inactivity**, and the
+next request then takes 50+ seconds to wake it back up — this is
+indistinguishable from "the app is broken" if it happens mid-demo. It only
+bites the *first* request after a gap; once warm, response times are normal.
+For an actual live event, upgrade to a paid instance (Starter, ~$7/month)
+beforehand so it never sleeps.
 
 ## What's still a placeholder, worth flagging honestly in the pitch
 
