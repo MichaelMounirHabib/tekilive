@@ -145,7 +145,25 @@ function setVoiceEnabled(on){
   voiceEnabled = on;
   voiceBtn.textContent = on ? 'Voice: on' : 'Voice: off';
   voiceBtn.classList.toggle('voice-on', on);
-  if (!on && SPEECH_SUPPORTED){ speechSynthesis.cancel(); queuedUtterances = 0; }
+  if (!SPEECH_SUPPORTED) return;
+  speechSynthesis.cancel();
+  queuedUtterances = 0;
+  if (on){
+    // Mobile browsers (iOS Safari especially) only allow speech synthesis
+    // triggered synchronously from a user tap — a later speak() call from
+    // an async WebSocket message can be silently blocked otherwise. Speak
+    // an audible confirmation right in this click handler to unlock it,
+    // and to prove out loud that voice actually works on this device.
+    const confirm = new SpeechSynthesisUtterance('Voice on');
+    confirm.lang = speechLocale;
+    confirm.onerror = () => {
+      voiceEnabled = false;
+      voiceBtn.textContent = 'Voice: off';
+      voiceBtn.classList.remove('voice-on');
+      document.getElementById('capStatusText').textContent = 'Voice unavailable on this device';
+    };
+    speechSynthesis.speak(confirm);
+  }
 }
 
 voiceBtn.addEventListener('click', () => setVoiceEnabled(!voiceEnabled));
