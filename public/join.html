@@ -28,10 +28,12 @@
   .lang-btn{background:var(--panel); border:1px solid var(--border); color:var(--white); font-family:inherit; font-size:15px; font-weight:500; padding:18px; border-radius:14px; cursor:pointer; text-align:left;}
   .lang-btn:active{border-color:var(--violet); background:rgba(124,58,237,.14);}
 
-  .event-brand{display:none; align-items:center; gap:12px; background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:14px 16px; margin-bottom:24px;}
-  .event-brand img{height:34px; width:auto; max-width:72px; object-fit:contain; background:#fff; border-radius:6px; padding:3px; display:none;}
-  .event-brand-text .event-name{font-size:14px; font-weight:600;}
-  .event-brand-text .org-name{font-size:12px; color:var(--gray); margin-top:2px;}
+  .event-brand{display:none; flex-direction:column; align-items:center; text-align:center; gap:16px; background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:26px 22px; margin-bottom:28px;}
+  .event-brand-logos{display:flex; align-items:center; justify-content:center; gap:18px;}
+  .event-brand-logos img{height:48px; width:auto; max-width:120px; object-fit:contain; background:#fff; border-radius:8px; padding:7px; display:none;}
+  .logo-divider{width:1px; height:34px; background:var(--border); display:none;}
+  .event-brand-text .event-name{font-size:17px; font-weight:600;}
+  .event-brand-text .org-name{font-size:12.5px; color:var(--gray); margin-top:4px;}
 
   .picker-footer{margin-top:auto; padding-top:28px; display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--gray);}
 
@@ -59,9 +61,9 @@
   .cap-feed .cap-line:not(:last-child):not(:nth-last-child(2)){opacity:.3;}
   @keyframes capIn{from{opacity:0; transform:translateY(10px);} to{transform:translateY(0);}}
 
-  .cap-branding{flex-shrink:0; display:none; align-items:center; justify-content:center; gap:8px; padding-top:12px; margin-top:12px; border-top:1px solid var(--border);}
-  .cap-branding img{height:16px; width:auto; max-width:40px; object-fit:contain; background:#fff; border-radius:3px; padding:2px; display:none;}
-  .cap-branding-sep{color:var(--border); font-size:10px;}
+  .cap-branding{flex-shrink:0; display:none; align-items:center; justify-content:center; gap:12px; padding-top:14px; margin-top:14px; border-top:1px solid var(--border);}
+  .cap-branding img{height:24px; width:auto; max-width:64px; object-fit:contain; background:#fff; border-radius:4px; padding:3px; display:none;}
+  .cap-branding-sep{width:1px; height:16px; background:var(--border); display:none;}
 </style>
 </head>
 <body>
@@ -79,8 +81,11 @@
   </div>
 
   <div class="event-brand" id="eventBrand">
-    <img id="eventBrandEventLogo" alt="">
-    <img id="eventBrandOrgLogo" alt="">
+    <div class="event-brand-logos">
+      <img id="eventBrandEventLogo" alt="">
+      <div class="logo-divider" id="eventBrandDivider"></div>
+      <img id="eventBrandOrgLogo" alt="">
+    </div>
     <div class="event-brand-text">
       <div class="event-name" id="eventBrandEventName"></div>
       <div class="org-name" id="eventBrandOrgName"></div>
@@ -121,8 +126,9 @@
       <span>TL</span>
       <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
     </div>
-    <span class="cap-branding-sep">·</span>
+    <span class="cap-branding-sep" id="capBrandingSep1"></span>
     <img id="capBrandingEventLogo" alt="">
+    <span class="cap-branding-sep" id="capBrandingSep2"></span>
     <img id="capBrandingOrgLogo" alt="">
   </div>
 </div>
@@ -171,6 +177,10 @@ function showImg(imgEl, src){
   else { imgEl.style.display = 'none'; imgEl.removeAttribute('src'); }
 }
 
+function showDivider(el, on){
+  el.style.display = on ? 'inline-block' : 'none';
+}
+
 function renderBranding(b){
   const bust = Date.now();
   const eventLogoSrc = b.hasEventLogo ? `/api/session/${sessionCode}/logo/event?t=${bust}` : null;
@@ -180,6 +190,7 @@ function renderBranding(b){
   eventBrand.style.display = (b.eventName || b.orgName || eventLogoSrc || orgLogoSrc) ? 'flex' : 'none';
   showImg(document.getElementById('eventBrandEventLogo'), eventLogoSrc);
   showImg(document.getElementById('eventBrandOrgLogo'), orgLogoSrc);
+  showDivider(document.getElementById('eventBrandDivider'), !!(eventLogoSrc && orgLogoSrc));
   document.getElementById('eventBrandEventName').textContent = b.eventName || '';
   document.getElementById('eventBrandOrgName').textContent = b.orgName ? `Presented by ${b.orgName}` : '';
 
@@ -187,6 +198,8 @@ function renderBranding(b){
   capBranding.style.display = (eventLogoSrc || orgLogoSrc) ? 'flex' : 'none';
   showImg(document.getElementById('capBrandingEventLogo'), eventLogoSrc);
   showImg(document.getElementById('capBrandingOrgLogo'), orgLogoSrc);
+  showDivider(document.getElementById('capBrandingSep1'), !!(eventLogoSrc || orgLogoSrc));
+  showDivider(document.getElementById('capBrandingSep2'), !!(eventLogoSrc && orgLogoSrc));
 }
 
 fetch(`/api/session/${sessionCode}/branding`)
