@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TekiLive — Admin Overview</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0D1321; --panel:#141B2E; --panel-2:#1B2439; --border:#263047;
+    --violet:#7C3AED; --blue:#2563EB; --sky:#38BDF8; --gray:#8A93A6; --white:#F5F6FA;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:'Poppins', system-ui, sans-serif; background:var(--ink); color:var(--white); min-height:100vh;}
+  .wrap{max-width:1120px; margin:0 auto; padding:32px 24px 64px;}
+  header{display:flex; align-items:center; justify-content:space-between; padding-bottom:24px; border-bottom:1px solid var(--border); margin-bottom:24px; flex-wrap:wrap; gap:16px;}
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand-mark{width:34px; height:34px; border-radius:9px; background:linear-gradient(135deg, var(--violet), var(--blue)); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:15px; overflow:hidden; flex-shrink:0;}
+  .brand-mark img{width:100%; height:100%; object-fit:contain; display:none; background:#fff;}
+  .brand-name{font-size:18px; font-weight:600;}
+  .brand-sub{font-size:12.5px; color:var(--gray); margin-top:1px;}
+
+  label{display:block; font-size:12.5px; color:var(--gray); margin-bottom:7px; font-weight:500;}
+  input{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
+  .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:11px 20px; border-radius:10px; cursor:pointer; font-size:14px;}
+  .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
+  .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
+  .btn-danger{background:transparent; border:1px solid #7f2531; color:#F87171; font-family:inherit; font-weight:500; padding:7px 12px; border-radius:8px; cursor:pointer; font-size:12.5px;}
+
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
+  .panel-title{font-size:13px; font-weight:600; color:var(--gray); margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;}
+  .empty-note{font-size:13.5px; color:var(--gray); padding:14px 0;}
+
+  .session-card{border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:12px;}
+  .session-card:last-child{margin-bottom:0;}
+  .session-card-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;}
+  .session-code{font-size:15px; font-weight:600; color:var(--sky);}
+  .session-event{font-size:12.5px; color:var(--gray);}
+  .badge{font-size:11.5px; font-weight:600; padding:3px 9px; border-radius:999px;}
+  .badge.live{background:rgba(52,211,153,.15); color:#34D399;}
+  .badge.idle{background:rgba(138,147,166,.15); color:var(--gray);}
+  .lang-chips{display:flex; flex-wrap:wrap; gap:6px;}
+  .lang-chip{font-size:12px; background:var(--panel-2); border:1px solid var(--border); padding:4px 10px; border-radius:999px;}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  th{text-align:left; font-size:11.5px; color:var(--gray); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border);}
+  td{padding:10px; border-bottom:1px solid var(--border); vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+
+  .new-user-grid{display:grid; grid-template-columns:1.4fr 1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:6px;}
+  @media (max-width:900px){ .new-user-grid{grid-template-columns:1fr 1fr;} }
+  .form-status{font-size:12.5px; color:var(--gray); margin-top:8px;}
+  .form-status.error{color:#F59E0B;}
+
+  .login-wrap{max-width:380px; margin:0 auto; padding:80px 24px;}
+  .login-card{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:28px;}
+  .login-card h1{font-size:19px; font-weight:600; margin:18px 0 6px;}
+  .login-card .lede{font-size:13.5px; color:var(--gray); margin-bottom:22px; line-height:1.5;}
+  .login-card label{margin-top:14px;}
+  .login-error{font-size:13px; color:#F59E0B; margin-top:12px; display:none;}
+</style>
+</head>
+<body>
+
+<div class="login-wrap" id="loginScreen" style="display:none;">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark">
+        <span>TL</span>
+        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
+      </div>
+      <div class="brand-name">TekiLive</div>
+    </div>
+    <h1>Admin sign-in</h1>
+    <div class="lede">Overview access is limited to event admins.</div>
+    <label for="loginEmail">Email</label>
+    <input id="loginEmail" type="email" autocomplete="username">
+    <label for="loginPassword">Password</label>
+    <input id="loginPassword" type="password" autocomplete="current-password">
+    <button class="gradient-btn" id="loginBtn" style="width:100%; margin-top:20px;">Sign in</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<div class="login-wrap" id="deniedScreen" style="display:none;">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark">
+        <span>TL</span>
+        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
+      </div>
+      <div class="brand-name">TekiLive</div>
+    </div>
+    <h1>Admin access required</h1>
+    <div class="lede">This account isn't an admin. If you're a stage manager, use the presenter console instead.</div>
+    <button class="btn-outline" id="deniedLogoutBtn" style="width:100%;">Log out</button>
+  </div>
+</div>
+
+<div class="wrap" id="adminWrap" style="display:none;">
+  <header>
+    <div class="brand">
+      <div class="brand-mark">
+        <span>TL</span>
+        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
+      </div>
+      <div>
+        <div class="brand-name">TekiLive</div>
+        <div class="brand-sub">Admin overview</div>
+      </div>
+    </div>
+    <button class="btn-outline" id="logoutBtn">Log out</button>
+  </header>
+
+  <div class="panel">
+    <div class="panel-title"><span>Active sessions</span><span id="sessionsUpdated"></span></div>
+    <div id="sessionsList"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Stage manager accounts</div>
+    <div class="new-user-grid">
+      <div>
+        <label for="newEmail">Email</label>
+        <input id="newEmail" type="email" placeholder="stage@tekiminds.local">
+      </div>
+      <div>
+        <label for="newPassword">Password</label>
+        <input id="newPassword" type="password" placeholder="min 8 characters">
+      </div>
+      <div>
+        <label for="newSessionCode">Session code</label>
+        <input id="newSessionCode" placeholder="e.g. STAGE1" style="text-transform:uppercase;">
+      </div>
+      <div>
+        <label for="newStageName">Stage label</label>
+        <input id="newStageName" placeholder="e.g. Main Hall">
+      </div>
+      <button class="gradient-btn" id="addUserBtn">Add account</button>
+    </div>
+    <div class="form-status" id="userFormStatus"></div>
+    <table style="margin-top:16px;">
+      <thead>
+        <tr><th>Email</th><th>Session</th><th>Stage</th><th>Created</th><th></th></tr>
+      </thead>
+      <tbody id="usersTableBody"></tbody>
+    </table>
+    <div class="empty-note" id="usersEmptyNote" style="display:none;">No stage manager accounts yet.</div>
+  </div>
+</div>
+
+<script>
+const loginScreen = document.getElementById('loginScreen');
+const deniedScreen = document.getElementById('deniedScreen');
+const adminWrap = document.getElementById('adminWrap');
+const loginBtn = document.getElementById('loginBtn');
+const loginEmail = document.getElementById('loginEmail');
+const loginPassword = document.getElementById('loginPassword');
+const loginError = document.getElementById('loginError');
+
+function show(el){ [loginScreen, deniedScreen, adminWrap].forEach(x => x.style.display = 'none'); el.style.display = el === adminWrap ? 'block' : 'block'; }
+
+async function attemptLogin(){
+  loginError.style.display = 'none';
+  loginBtn.disabled = true;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: loginEmail.value.trim(), password: loginPassword.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Sign-in failed');
+    afterAuth(data);
+  } catch (err) {
+    loginError.textContent = err.message;
+    loginError.style.display = 'block';
+  } finally {
+    loginBtn.disabled = false;
+  }
+}
+loginBtn.addEventListener('click', attemptLogin);
+loginPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') attemptLogin(); });
+
+async function logout(){
+  await fetch('/api/auth/logout', { method: 'POST' });
+  stopPolling();
+  show(loginScreen);
+}
+document.getElementById('logoutBtn').addEventListener('click', logout);
+document.getElementById('deniedLogoutBtn').addEventListener('click', logout);
+
+function afterAuth(user){
+  if (user.role !== 'admin') { show(deniedScreen); return; }
+  show(adminWrap);
+  refreshSessions();
+  refreshUsers();
+  startPolling();
+}
+
+(async function bootstrap(){
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) { afterAuth(await res.json()); return; }
+    show(loginScreen);
+  } catch (e) {
+    show(loginScreen);
+  }
+})();
+
+const LANGUAGE_NAMES = { en:'English', ar:'Arabic', fr:'French', es:'Spanish', de:'German', zh:'Chinese', pt:'Portuguese', ru:'Russian', hi:'Hindi', tr:'Turkish' };
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+function renderSessions(list){
+  const el = document.getElementById('sessionsList');
+  document.getElementById('sessionsUpdated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  if (!list.length){
+    el.innerHTML = '<div class="empty-note">No active sessions right now. A session appears here as soon as a presenter or attendee connects.</div>';
+    return;
+  }
+  el.innerHTML = list.map(s => {
+    const chips = Object.entries(s.audienceByLanguage)
+      .map(([lang, count]) => `<span class="lang-chip">${LANGUAGE_NAMES[lang] || lang}: ${count}</span>`)
+      .join('') || '<span class="lang-chip">No audience yet</span>';
+    const eventLine = s.branding.eventName || s.branding.orgName
+      ? `${escapeHtml(s.branding.eventName || '')}${s.branding.eventName && s.branding.orgName ? ' — ' : ''}${escapeHtml(s.branding.orgName || '')}`
+      : 'No event branding set';
+    return `
+      <div class="session-card">
+        <div class="session-card-top">
+          <div>
+            <span class="session-code">${escapeHtml(s.code)}</span>
+            <span class="badge ${s.speakerConnected ? 'live' : 'idle'}" style="margin-left:8px;">${s.speakerConnected ? 'Presenter connected' : 'No presenter'}</span>
+          </div>
+          <span class="session-event">${eventLine}</span>
+        </div>
+        <div class="lang-chips">
+          <span class="lang-chip">Total audience: ${s.audienceTotal}</span>
+          ${chips}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function refreshSessions(){
+  try {
+    const res = await fetch('/api/admin/sessions');
+    if (res.ok) renderSessions(await res.json());
+  } catch (e) {}
+}
+
+function renderUsers(users){
+  const body = document.getElementById('usersTableBody');
+  const empty = document.getElementById('usersEmptyNote');
+  empty.style.display = users.length ? 'none' : 'block';
+  body.innerHTML = users.map(u => `
+    <tr>
+      <td>${escapeHtml(u.email)}</td>
+      <td>${escapeHtml(u.session_code || '—')}</td>
+      <td>${escapeHtml(u.stage_name || '—')}</td>
+      <td>${new Date(u.created_at).toLocaleDateString()}</td>
+      <td><button class="btn-danger" data-id="${u.id}">Remove</button></td>
+    </tr>`).join('');
+  body.querySelectorAll('button[data-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Remove account ${btn.closest('tr').children[0].textContent}?`)) return;
+      await fetch(`/api/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+      refreshUsers();
+    });
+  });
+}
+
+async function refreshUsers(){
+  try {
+    const res = await fetch('/api/admin/users');
+    if (res.ok) renderUsers(await res.json());
+  } catch (e) {}
+}
+
+document.getElementById('addUserBtn').addEventListener('click', async () => {
+  const email = document.getElementById('newEmail').value.trim();
+  const password = document.getElementById('newPassword').value;
+  const sessionCode = document.getElementById('newSessionCode').value.trim();
+  const stageName = document.getElementById('newStageName').value.trim();
+  const status = document.getElementById('userFormStatus');
+  status.classList.remove('error');
+  status.textContent = 'Adding…';
+  try {
+    const res = await fetch('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, sessionCode, stageName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to add account');
+    document.getElementById('newEmail').value = '';
+    document.getElementById('newPassword').value = '';
+    document.getElementById('newSessionCode').value = '';
+    document.getElementById('newStageName').value = '';
+    status.textContent = `Added ${data.email}`;
+    refreshUsers();
+  } catch (err) {
+    status.textContent = err.message;
+    status.classList.add('error');
+  }
+});
+
+let pollTimer = null;
+function startPolling(){
+  stopPolling();
+  pollTimer = setInterval(refreshSessions, 5000);
+}
+function stopPolling(){
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
+</script>
+</body>
+</html>

@@ -65,10 +65,39 @@
   .teki-footer-brand{display:flex; align-items:center; gap:8px;}
   .teki-footer-event{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
   .footer-logo{height:20px; width:auto; max-width:60px; object-fit:contain; background:#fff; border-radius:3px; padding:2px;}
+
+  .login-wrap{max-width:380px; margin:0 auto; padding:80px 24px; display:none;}
+  .login-card{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:28px;}
+  .login-card h1{font-size:19px; font-weight:600; margin:18px 0 6px;}
+  .login-card .lede{font-size:13.5px; color:var(--gray); margin-bottom:22px; line-height:1.5;}
+  .login-card label{margin-top:14px;}
+  .login-error{font-size:13px; color:#F59E0B; margin-top:12px; display:none;}
+  .header-actions{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .stage-tag{font-size:12.5px; color:var(--sky); font-weight:600;}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="login-wrap" id="loginScreen">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark">
+        <span>TL</span>
+        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
+      </div>
+      <div class="brand-name">TekiLive</div>
+    </div>
+    <h1>Presenter sign-in</h1>
+    <div class="lede">Console access is limited to assigned stage managers. Contact your event admin if you don't have a login.</div>
+    <label for="loginEmail">Email</label>
+    <input id="loginEmail" type="email" autocomplete="username">
+    <label for="loginPassword">Password</label>
+    <input id="loginPassword" type="password" autocomplete="current-password">
+    <button class="gradient-btn" id="loginBtn" style="width:100%; margin-top:20px;">Sign in</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<div class="wrap" id="consoleWrap" style="display:none;">
   <header>
     <div class="brand">
       <div class="brand-mark">
@@ -80,7 +109,11 @@
         <div class="brand-sub">Presenter console — Phase 2 (multi-device)</div>
       </div>
     </div>
-    <div class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">Not connected</span></div>
+    <div class="header-actions">
+      <span class="stage-tag" id="stageTag" style="display:none;"></span>
+      <div class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">Not connected</span></div>
+      <button class="btn-outline" id="logoutBtn" style="display:none;">Log out</button>
+    </div>
   </header>
 
   <div class="controls">
@@ -343,7 +376,6 @@ function connectWs(){
     }
   };
 }
-connectWs();
 
 // The mic feed must follow the session code shown on screen (and encoded
 // in the QR code) — without this, changing the code after page load left
@@ -463,6 +495,81 @@ toggleBtn.addEventListener('click', () => {
     statusDot.classList.remove('live');
   }
 });
+
+// --- Auth gate -------------------------------------------------------
+// Console access is gated behind sign-in when accounts are configured
+// on this deployment (DATABASE_URL + SESSION_SECRET set). If they're
+// not set — local dev, or a deployment that hasn't opted in yet — this
+// falls back to the original open-console behavior rather than locking
+// anyone out.
+const loginScreen = document.getElementById('loginScreen');
+const consoleWrap = document.getElementById('consoleWrap');
+const loginBtn = document.getElementById('loginBtn');
+const loginEmail = document.getElementById('loginEmail');
+const loginPassword = document.getElementById('loginPassword');
+const loginError = document.getElementById('loginError');
+const logoutBtn = document.getElementById('logoutBtn');
+const stageTag = document.getElementById('stageTag');
+
+function showConsole(user){
+  loginScreen.style.display = 'none';
+  consoleWrap.style.display = 'block';
+  if (user && user.role === 'stage_manager'){
+    sessionInput.value = user.sessionCode;
+    sessionInput.disabled = true;
+    setupQr();
+    loadBranding();
+    stageTag.textContent = `Stage: ${user.stageName || user.sessionCode}`;
+    stageTag.style.display = 'inline';
+  }
+  if (user) logoutBtn.style.display = 'inline-block';
+  connectWs();
+}
+
+function showLogin(){
+  consoleWrap.style.display = 'none';
+  loginScreen.style.display = 'block';
+}
+
+async function attemptLogin(){
+  loginError.style.display = 'none';
+  loginBtn.disabled = true;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: loginEmail.value.trim(), password: loginPassword.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Sign-in failed');
+    showConsole(data);
+  } catch (err) {
+    loginError.textContent = err.message;
+    loginError.style.display = 'block';
+  } finally {
+    loginBtn.disabled = false;
+  }
+}
+loginBtn.addEventListener('click', attemptLogin);
+loginPassword.addEventListener('keydown', (e) => { if (e.key === 'Enter') attemptLogin(); });
+
+logoutBtn.addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  if (ws) { ws.manualClose = true; ws.close(); }
+  location.reload();
+});
+
+(async function bootstrapAuth(){
+  try {
+    const res = await fetch('/api/auth/me');
+    if (res.ok) { showConsole(await res.json()); return; }
+    const data = await res.json().catch(() => ({}));
+    if (data.authConfigured === false) { showConsole(null); return; } // accounts not set up here — stay open
+    showLogin();
+  } catch (e) {
+    showConsole(null); // can't reach auth — fail open rather than lock out the presenter
+  }
+})();
 </script>
 </body>
 </html>

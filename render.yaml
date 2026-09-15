@@ -19,3 +19,11 @@ services:
         sync: false
       - key: AZURE_TRANSLATOR_REGION
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

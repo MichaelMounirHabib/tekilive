@@ -53,6 +53,9 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | `AZURE_TRANSLATOR_KEY` | alternative | *(empty)* | Azure Translator API key, used only if no DeepL key is set |
 | `AZURE_TRANSLATOR_REGION` | with the key above | *(empty)* | Azure resource region, e.g. `eastus` |
 | `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the free MyMemory API (only used as a last-resort fallback when no other provider is set) for a higher rate limit |
+| `DATABASE_URL` | for accounts | *(empty)* | Postgres connection string. Only needed for presenter-console login and the admin overview — see Accounts below |
+| `SESSION_SECRET` | for accounts | *(empty)* | Random string used to sign login sessions. Required alongside `DATABASE_URL` for accounts to activate |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first deploy only | *(empty)* | Bootstraps one admin account on startup if no admin exists yet. Safe to leave set — bootstrap is a no-op once that admin already exists |
 
 Copy `.env.example` to `.env` for local runs if you want to set these; most
 hosting platforms let you set them directly in their dashboard instead.
@@ -111,6 +114,39 @@ attendees connected, no longer wipes it out (only true server restarts do,
 same as every other piece of session state — see "no persistence" below).
 Set it once, shortly before the event starts.
 
+## Accounts
+
+Two roles, both optional — leave `DATABASE_URL`/`SESSION_SECRET` unset and
+the presenter console stays exactly as open as before (no login, anyone
+with the URL can run any session), which is still fine for a single-track
+demo. Set them both to turn on:
+
+- **Stage managers** — one account per stage/track, each pre-assigned to
+  a specific session code by an admin. Logging in at `/control.html` takes
+  them straight to their stage's console (session code locked, can't be
+  changed or mixed up with another track) and lets them pick the spoken
+  language, start/stop listening, and set that stage's branding, same as
+  the console always worked.
+- **Admins** — sign in at `/admin.html` to see every currently active
+  session at a glance (presenter connected or not, live audience count per
+  language, event branding) and to create/remove stage manager accounts.
+  The very first admin is bootstrapped automatically from `ADMIN_EMAIL` /
+  `ADMIN_PASSWORD` on server startup; every admin after that is created
+  from the admin overview page itself.
+
+Enforcement isn't just a login screen on top of an open backend: the
+WebSocket connection a presenter console uses to actually stream captions
+checks the session cookie server-side too, so a stage manager genuinely
+cannot connect to (or interfere with) a different stage's session, even by
+hand-crafting a request. Audience join links are deliberately **not**
+gated — attendees scanning a QR code should never need an account.
+
+Accounts are the one thing in this app backed by a real database instead
+of memory, since — unlike a session's captions or branding — losing every
+account on a server restart mid-event would be a real problem. A session's
+own state (captions, connected audience, branding) still lives in memory
+exactly as before; only the `users` table is durable.
+
 ## Run it locally
 
 ```bash
@@ -159,6 +195,13 @@ way.
 4. Leave `ALLOWED_ORIGINS` blank unless you want to lock the WebSocket down
    to a specific domain later. Set `DEEPL_API_KEY` (see Translation provider
    above) so captions don't rely on the unreliable MyMemory fallback.
+   If you want stage-manager/admin logins (see Accounts above), also
+   create a Postgres instance ([dashboard.render.com](https://dashboard.render.com)
+   → **New** → **Postgres** — the free tier works but auto-expires after
+   30 days, fine for testing, upgrade to a paid instance before a real
+   event), then set `DATABASE_URL` to its connection string, `SESSION_SECRET`
+   to any random string, and `ADMIN_EMAIL`/`ADMIN_PASSWORD` to your first
+   admin login. Skip all four to keep the console open with no login.
 5. Deploy. Render builds and gives you a public URL like
    `https://<service-name>.onrender.com` — HTTPS and WSS both work on it
    automatically, no extra config. Note the `.onrender.com` subdomain is
@@ -189,5 +232,7 @@ beforehand so it never sleeps.
   session state. Fine for a single scheduled event set up shortly
   beforehand; adding a real datastore would unlock branding (and a
   post-event transcript/summary deliverable) surviving restarts.
-- **No auth on sessions:** anyone with the QR/URL can join a session. Fine
-  for an open panel, worth adding a passcode for anything private.
+- **No auth on audience links:** by design — anyone with the QR/URL can
+  join a session as an attendee. The presenter console *can* be gated
+  behind stage-manager/admin accounts (see Accounts above) if you want
+  that; audience join links stay open either way.

@@ -1,9 +1,13 @@
+if (process.env.NODE_ENV !== 'production') require('dotenv').config();
+
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const multer = require('multer');
 const { WebSocketServer } = require('ws');
 const { translate } = require('./translate');
+const db = require('./db');
+const auth = require('./auth');
 
 const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
@@ -12,8 +16,70 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .filter(Boolean);
 
 const app = express();
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.status(200).send('ok'));
+
+app.post('/api/auth/login', async (req, res) => {
+  if (!db.isEnabled() || !auth.isEnabled()) return res.status(503).json({ error: 'Accounts are not configured on this deployment' });
+  const email = (req.body.email || '').trim();
+  const password = req.body.password || '';
+  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+  const user = await db.findUserByEmail(email);
+  if (!user || !(await db.verifyPassword(user, password))) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+  res.set('Set-Cookie', auth.cookieHeader(auth.signToken(user)));
+  res.json(db.toPublicUser(user));
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.set('Set-Cookie', auth.clearCookieHeader());
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const authConfigured = db.isEnabled() && auth.isEnabled();
+  const user = auth.readUserFromRequest(req);
+  if (!user) return res.status(401).json({ error: 'Not signed in', authConfigured });
+  res.json({ id: user.id, email: user.email, role: user.role, sessionCode: user.sessionCode, stageName: user.stageName, authConfigured });
+});
+
+app.get('/api/admin/sessions', auth.requireAdmin, (req, res) => {
+  const list = Array.from(sessions.entries()).map(([code, session]) => ({
+    code,
+    speakerConnected: session.speakers.size > 0,
+    speakerCount: session.speakers.size,
+    audienceTotal: session.audience.size,
+    audienceByLanguage: audienceStats(session),
+    branding: brandingMeta(session),
+  }));
+  res.json(list);
+});
+
+app.get('/api/admin/users', auth.requireAdmin, async (req, res) => {
+  res.json(await db.listStageManagers());
+});
+
+app.post('/api/admin/users', auth.requireAdmin, async (req, res) => {
+  const { email, password, sessionCode, stageName } = req.body;
+  if (!email || !password || !sessionCode) return res.status(400).json({ error: 'Email, password, and session code are required' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const existing = await db.findUserByEmail(email);
+  if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
+  try {
+    const user = await db.createUser({ email, password, role: 'stage_manager', sessionCode, stageName: stageName || null });
+    res.status(201).json(db.toPublicUser(user));
+  } catch (err) {
+    log('Failed to create stage manager account:', err.message);
+    res.status(500).json({ error: 'Failed to create account' });
+  }
+});
+
+app.delete('/api/admin/users/:id', auth.requireAdmin, async (req, res) => {
+  await db.deleteUser(req.params.id);
+  res.json({ ok: true });
+});
 
 // Event/organizer logos, uploaded per session. Stored in memory on the
 // session object (like everything else here) rather than a cloud storage
@@ -78,8 +144,23 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
   verifyClient(info, cb) {
-    if (ALLOWED_ORIGINS.length === 0) return cb(true);
-    cb(ALLOWED_ORIGINS.includes(info.origin));
+    if (ALLOWED_ORIGINS.length > 0 && !ALLOWED_ORIGINS.includes(info.origin)) return cb(false);
+
+    const url = new URL(info.req.url, `http://${info.req.headers.host}`);
+    const role = url.searchParams.get('role') || 'audience';
+    if (role !== 'speaker') return cb(true); // audience join links stay open, no login needed
+
+    // If accounts aren't configured on this deployment (no SESSION_SECRET
+    // set), fall back to the original open-access behavior rather than
+    // locking everyone out.
+    if (!auth.isEnabled()) return cb(true);
+
+    const sessionCode = (url.searchParams.get('session') || 'DEMO').toUpperCase();
+    const user = auth.readUserFromRequest(info.req);
+    if (!user) return cb(false, 401, 'Sign in required');
+    if (user.role === 'admin') return cb(true);
+    if (user.role === 'stage_manager' && user.sessionCode === sessionCode) return cb(true);
+    return cb(false, 403, 'Not authorized for this session');
   },
 });
 
@@ -239,6 +320,10 @@ wss.on('connection', (ws, req) => {
     });
   }
 });
+
+db.init()
+  .then(() => log('Database ready'))
+  .catch((err) => log('Database init failed (accounts/admin features will not work):', err.message));
 
 server.listen(PORT, () => {
   console.log(`TekiLive server listening on port ${PORT}`);
