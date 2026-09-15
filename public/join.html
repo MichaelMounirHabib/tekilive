@@ -52,7 +52,7 @@
   .size-btn:active{border-color:var(--violet); background:rgba(124,58,237,.14);}
   .size-btn:disabled{opacity:.35; cursor:not-allowed;}
 
-  .cap-feed{flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:14px; overflow-y:auto; scroll-behavior:smooth; -webkit-overflow-scrolling:touch;}
+  .cap-feed{flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:14px; overflow-y:auto; scroll-behavior:smooth;}
   .cap-line{font-size:calc(clamp(20px, 5.5vw, 28px) * var(--font-scale, 1)); line-height:1.5; font-weight:500; opacity:1; animation:capIn .3s ease-out;}
   .cap-line.placeholder{color:var(--gray); font-weight:400; font-size:16px; animation:none;}
   .cap-feed .cap-line:not(:last-child):nth-last-child(2){opacity:.55;}
@@ -128,6 +128,18 @@
 </div>
 
 <script>
+// Catch-all so any unexpected error surfaces where the viewer (usually on
+// a phone with no accessible JS console) can actually see and report it,
+// instead of the page just silently going quiet.
+window.addEventListener('error', (e) => {
+  const el = document.getElementById('capStatusText');
+  if (el) el.textContent = `Page error: ${e.message}`;
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const el = document.getElementById('capStatusText');
+  if (el) el.textContent = `Page error: ${e.reason && e.reason.message ? e.reason.message : e.reason}`;
+});
+
 const LANGUAGES = [
   { code:'en', name:'English',    speech:'en-US' },
   { code:'ar', name:'Arabic',     speech:'ar-SA' },
@@ -199,6 +211,11 @@ function addCaptionLine(text){
   capFeed.appendChild(line);
   while (capFeed.children.length > MAX_CAPTION_LINES) capFeed.removeChild(capFeed.firstChild);
   if (wasNearBottom) capFeed.scrollTop = capFeed.scrollHeight;
+  // iOS Safari has a known bug where a momentum-scroll container can stop
+  // repainting newly appended content until the user touches the screen,
+  // even though the DOM updated correctly. Forcing a synchronous layout
+  // read nudges it to repaint immediately instead of silently freezing.
+  void capFeed.offsetHeight;
 }
 
 const RTL_LANGS = ['ar'];
@@ -247,11 +264,15 @@ if (!SPEECH_SUPPORTED) voiceBtn.style.display = 'none';
 function speakCaption(text){
   if (!voiceEnabled || !SPEECH_SUPPORTED) return;
   if (queuedUtterances >= MAX_QUEUED_UTTERANCES) return; // falling behind — stay live rather than read a growing backlog
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = speechLocale;
-  queuedUtterances++;
-  utter.onend = utter.onerror = () => { queuedUtterances = Math.max(0, queuedUtterances - 1); };
-  speechSynthesis.speak(utter);
+  try {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = speechLocale;
+    queuedUtterances++;
+    utter.onend = utter.onerror = () => { queuedUtterances = Math.max(0, queuedUtterances - 1); };
+    speechSynthesis.speak(utter);
+  } catch (err) {
+    console.error('speakCaption failed', err);
+  }
 }
 
 function setVoiceEnabled(on){
@@ -320,14 +341,21 @@ function connect(langCode){
   };
   ws.onmessage = (evt) => {
     lastServerMessageAt = Date.now();
-    const msg = JSON.parse(evt.data);
-    if (msg.type === 'caption'){
-      addCaptionLine(msg.text);
-      speakCaption(msg.text);
-      statusText.textContent = `Live — ${msg.latency}ms`;
+    // Surface any failure directly on screen — this page runs on phones
+    // whose owners can't easily pull up a JS console to relay what broke.
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === 'caption'){
+        addCaptionLine(msg.text);
+        speakCaption(msg.text);
+        statusText.textContent = `Live — ${msg.latency}ms`;
+      }
+      if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
+      if (msg.type === 'branding') renderBranding(msg.branding);
+    } catch (err) {
+      console.error('onmessage failed', err);
+      statusText.textContent = `Display error: ${err.message}`;
     }
-    if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
-    if (msg.type === 'branding') renderBranding(msg.branding);
   };
 
   // The server sends an app-level heartbeat every 12s regardless of
