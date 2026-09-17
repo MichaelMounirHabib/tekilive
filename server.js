@@ -58,25 +58,35 @@ app.get('/api/admin/sessions', auth.requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/users', auth.requireAdmin, async (req, res) => {
-  res.json(await db.listStageManagers());
+  res.json(await db.listUsers());
 });
 
 app.post('/api/admin/users', auth.requireAdmin, async (req, res) => {
   const { email, password, sessionCode, stageName } = req.body;
-  if (!email || !password || !sessionCode) return res.status(400).json({ error: 'Email, password, and session code are required' });
+  const role = req.body.role === 'admin' ? 'admin' : 'stage_manager';
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+  if (role === 'stage_manager' && !sessionCode) return res.status(400).json({ error: 'Session code is required for a stage manager account' });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   const existing = await db.findUserByEmail(email);
   if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
   try {
-    const user = await db.createUser({ email, password, role: 'stage_manager', sessionCode, stageName: stageName || null });
+    const user = await db.createUser({
+      email, password, role,
+      sessionCode: role === 'stage_manager' ? sessionCode : null,
+      stageName: role === 'stage_manager' ? (stageName || null) : null,
+    });
     res.status(201).json(db.toPublicUser(user));
   } catch (err) {
-    log('Failed to create stage manager account:', err.message);
+    log('Failed to create account:', err.message);
     res.status(500).json({ error: 'Failed to create account' });
   }
 });
 
 app.delete('/api/admin/users/:id', auth.requireAdmin, async (req, res) => {
+  const target = await db.findUserById(req.params.id);
+  if (target && target.role === 'admin' && (await db.countAdmins()) <= 1) {
+    return res.status(400).json({ error: 'Cannot remove the last remaining admin account' });
+  }
   await db.deleteUser(req.params.id);
   res.json({ ok: true });
 });

@@ -73,12 +73,17 @@ async function verifyPassword(user, password) {
   return bcrypt.compare(password, user.password_hash);
 }
 
-async function listStageManagers() {
+async function listUsers() {
   const { rows } = await pool.query(
     `SELECT id, email, role, session_code, stage_name, created_at FROM users
-     WHERE role = 'stage_manager' ORDER BY created_at DESC`
+     ORDER BY role = 'admin' DESC, created_at DESC`
   );
   return rows;
+}
+
+async function countAdmins() {
+  const { rows } = await pool.query(`SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin'`);
+  return rows[0].count;
 }
 
 async function deleteUser(id) {
@@ -103,7 +108,8 @@ module.exports = {
   findUserById,
   createUser,
   verifyPassword,
-  listStageManagers,
+  listUsers,
+  countAdmins,
   deleteUser,
   toPublicUser,
 };

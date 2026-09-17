@@ -21,7 +21,9 @@
   .brand-sub{font-size:12.5px; color:var(--gray); margin-top:1px;}
 
   label{display:block; font-size:12.5px; color:var(--gray); margin-bottom:7px; font-weight:500;}
-  input{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
+  input, select{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
+  .role-badge{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:rgba(56,189,248,.15); color:var(--sky);}
+  .role-badge.admin{background:rgba(124,58,237,.18); color:#C4B5FD;}
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:11px 20px; border-radius:10px; cursor:pointer; font-size:14px;}
   .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
   .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
@@ -47,7 +49,7 @@
   td{padding:10px; border-bottom:1px solid var(--border); vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
 
-  .new-user-grid{display:grid; grid-template-columns:1.4fr 1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:6px;}
+  .new-user-grid{display:grid; grid-template-columns:0.9fr 1.3fr 1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:6px;}
   @media (max-width:900px){ .new-user-grid{grid-template-columns:1fr 1fr;} }
   .form-status{font-size:12.5px; color:var(--gray); margin-top:8px;}
   .form-status.error{color:#F59E0B;}
@@ -118,8 +120,15 @@
   </div>
 
   <div class="panel">
-    <div class="panel-title">Stage manager accounts</div>
+    <div class="panel-title">Accounts</div>
     <div class="new-user-grid">
+      <div>
+        <label for="newRole">Role</label>
+        <select id="newRole">
+          <option value="stage_manager">Stage manager</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
       <div>
         <label for="newEmail">Email</label>
         <input id="newEmail" type="email" placeholder="stage@tekiminds.local">
@@ -128,11 +137,11 @@
         <label for="newPassword">Password</label>
         <input id="newPassword" type="password" placeholder="min 8 characters">
       </div>
-      <div>
+      <div id="newSessionCodeField">
         <label for="newSessionCode">Session code</label>
         <input id="newSessionCode" placeholder="e.g. STAGE1" style="text-transform:uppercase;">
       </div>
-      <div>
+      <div id="newStageNameField">
         <label for="newStageName">Stage label</label>
         <input id="newStageName" placeholder="e.g. Main Hall">
       </div>
@@ -141,11 +150,11 @@
     <div class="form-status" id="userFormStatus"></div>
     <table style="margin-top:16px;">
       <thead>
-        <tr><th>Email</th><th>Session</th><th>Stage</th><th>Created</th><th></th></tr>
+        <tr><th>Email</th><th>Role</th><th>Session</th><th>Stage</th><th>Created</th><th></th></tr>
       </thead>
       <tbody id="usersTableBody"></tbody>
     </table>
-    <div class="empty-note" id="usersEmptyNote" style="display:none;">No stage manager accounts yet.</div>
+    <div class="empty-note" id="usersEmptyNote" style="display:none;">No accounts yet.</div>
   </div>
 </div>
 
@@ -259,6 +268,7 @@ function renderUsers(users){
   body.innerHTML = users.map(u => `
     <tr>
       <td>${escapeHtml(u.email)}</td>
+      <td><span class="role-badge ${u.role === 'admin' ? 'admin' : ''}">${u.role === 'admin' ? 'Admin' : 'Stage manager'}</span></td>
       <td>${escapeHtml(u.session_code || '—')}</td>
       <td>${escapeHtml(u.stage_name || '—')}</td>
       <td>${new Date(u.created_at).toLocaleDateString()}</td>
@@ -267,7 +277,12 @@ function renderUsers(users){
   body.querySelectorAll('button[data-id]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm(`Remove account ${btn.closest('tr').children[0].textContent}?`)) return;
-      await fetch(`/api/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Failed to remove account');
+        return;
+      }
       refreshUsers();
     });
   });
@@ -280,7 +295,17 @@ async function refreshUsers(){
   } catch (e) {}
 }
 
+const newRole = document.getElementById('newRole');
+function updateRoleFields(){
+  const isAdmin = newRole.value === 'admin';
+  document.getElementById('newSessionCodeField').style.display = isAdmin ? 'none' : 'block';
+  document.getElementById('newStageNameField').style.display = isAdmin ? 'none' : 'block';
+}
+newRole.addEventListener('change', updateRoleFields);
+updateRoleFields();
+
 document.getElementById('addUserBtn').addEventListener('click', async () => {
+  const role = newRole.value;
   const email = document.getElementById('newEmail').value.trim();
   const password = document.getElementById('newPassword').value;
   const sessionCode = document.getElementById('newSessionCode').value.trim();
@@ -292,7 +317,7 @@ document.getElementById('addUserBtn').addEventListener('click', async () => {
     const res = await fetch('/api/admin/users', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, sessionCode, stageName }),
+      body: JSON.stringify({ role, email, password, sessionCode, stageName }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to add account');
