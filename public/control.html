@@ -25,7 +25,7 @@
   .dot.live{background:#34D399; box-shadow:0 0 0 0 rgba(52,211,153,.6); animation:pulse 1.6s infinite;}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5);}70%{box-shadow:0 0 0 8px rgba(52,211,153,0);}100%{box-shadow:0 0 0 0 rgba(52,211,153,0);}}
 
-  .controls{display:grid; grid-template-columns:1fr 1fr auto; gap:16px; align-items:end; background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
+  .controls{display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:16px; align-items:end; background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
   label{display:block; font-size:12.5px; color:var(--gray); margin-bottom:7px; font-weight:500;}
   select, input{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:12px 22px; border-radius:10px; cursor:pointer; font-size:14px;}
@@ -124,6 +124,14 @@
     <div>
       <label for="srcLang">Speaker is talking in</label>
       <select id="srcLang"></select>
+    </div>
+    <div>
+      <label for="paceSelect">Caption pacing</label>
+      <select id="paceSelect">
+        <option value="fast">Fast — ~3s behind, rougher</option>
+        <option value="balanced">Balanced — ~5s behind</option>
+        <option value="quality">Best quality — ~7s behind</option>
+      </select>
     </div>
     <div style="display:flex; gap:10px;">
       <button class="gradient-btn" id="toggleBtn">Start listening</button>
@@ -478,6 +486,24 @@ function sendChunk(text, segmentEnd){
   ws.send(JSON.stringify({ type:'final_transcript', text, segmentEnd, srcLang: srcSelect.value }));
 }
 
+// How much the translator gets to see at once: longer chunks translate
+// better but reach the audience a little later. Remembered per browser.
+const paceSelect = document.getElementById('paceSelect');
+const PACE_STORAGE_KEY = 'tekilive-pace';
+try {
+  const saved = localStorage.getItem(PACE_STORAGE_KEY);
+  paceSelect.value = [...paceSelect.options].some(o => o.value === saved) ? saved : 'balanced';
+} catch (e) { paceSelect.value = 'balanced'; }
+
+function makeChunker(){
+  return StreamChunker.createChunker({ lang: srcSelect.value, pace: paceSelect.value, onChunk: sendChunk });
+}
+
+paceSelect.addEventListener('change', () => {
+  try { localStorage.setItem(PACE_STORAGE_KEY, paceSelect.value); } catch (e) {}
+  if (chunker) chunker.setPace(paceSelect.value); // otherwise applied when listening starts
+});
+
 function handleResult(event){
   let interim = '', finalText = '';
   for (let i = event.resultIndex; i < event.results.length; i++){
@@ -508,7 +534,7 @@ function handleResult(event){
 toggleBtn.addEventListener('click', () => {
   if (!listening){
     micWarning.style.display = 'none';
-    chunker = StreamChunker.createChunker({ lang: srcSelect.value, onChunk: sendChunk });
+    chunker = makeChunker();
     recognition = buildRecognition();
     try {
       recognition.start();

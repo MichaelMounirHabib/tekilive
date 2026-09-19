@@ -26,8 +26,31 @@
   // returns without spaces). A chunk is sent once this many new tokens have
   // piled up, minus the last few — the recognizer keeps revising the tail
   // of what it just heard, so those are held back until they settle.
-  const DEFAULTS = { commitAt: 10, holdBack: 3, minChunk: 4, idleMs: 1500 };
-  const LANG_DEFAULTS = { zh: { commitAt: 14, holdBack: 4, minChunk: 6 } };
+  //
+  // Pace is the speed/quality trade-off: longer chunks give the translator
+  // more to work with but appear later. Measured against translating the
+  // whole text at once: fast ~82/100 at ~3s lag, balanced ~86 at ~5s,
+  // quality ~89 at ~7s (lag = time to speak one chunk, at ~2.5 words/s).
+  const PACES = {
+    fast:     { commitAt: 10, holdBack: 3 },
+    balanced: { commitAt: 16, holdBack: 3 },
+    quality:  { commitAt: 24, holdBack: 4 },
+  };
+  const ZH_SCALE = 1.4; // a Chinese character carries less than a word does
+  const DEFAULTS = { minChunk: 4, idleMs: 1500 };
+
+  function settingsFor(options) {
+    const lang = options.lang || 'en';
+    const pace = PACES[options.pace] || PACES.fast;
+    const scale = lang === 'zh' ? ZH_SCALE : 1;
+    return Object.assign(
+      { lang },
+      DEFAULTS,
+      { commitAt: Math.round(pace.commitAt * scale), holdBack: Math.round(pace.holdBack * scale) },
+      lang === 'zh' ? { minChunk: 6 } : {},
+      options // explicit values win, so tests can pin exact numbers
+    );
+  }
   const BREAK_RE = /[.!?;:,،؛؟。！？；：，]$/;
 
   // Words a chunk shouldn't end on ("thank you for | joining us"): cut there
@@ -58,7 +81,7 @@
   }
 
   function createChunker(options) {
-    const cfg = Object.assign({ lang: 'en' }, DEFAULTS, LANG_DEFAULTS[options.lang], options);
+    const cfg = settingsFor(options);
     let base = 0;         // first result of the phrase still being spoken
     let committed = 0;    // tokens of that phrase's text already sent
     let tokens = [];      // latest tokens of that phrase's text
@@ -138,6 +161,17 @@
         }
         emit(tokens.slice(committed, cut), false);
         committed = cut;
+      },
+
+      // Change the speed/quality trade-off while running. Done in place, not
+      // by making a new chunker: the recognizer's results list carries on,
+      // and a fresh chunker would resend every phrase already finished.
+      setPace(pace) {
+        const o = Object.assign({}, options, { pace });
+        delete o.commitAt; delete o.holdBack; // explicit numbers would override the new pace
+        const next = settingsFor(o);
+        cfg.commitAt = next.commitAt;
+        cfg.holdBack = next.holdBack;
       },
 
       // Recognizer stopped/restarted without finalizing: send what's left.

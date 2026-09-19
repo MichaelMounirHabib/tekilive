@@ -42,6 +42,16 @@ async function translateDeepL(text, source, target, context) {
     body: new URLSearchParams(p).toString(),
   });
   let res = await send(params);
+  // Chunks arrive every couple of seconds, each translated into every
+  // active language at once, so a busy moment can trip DeepL's rate limit.
+  // Wait it out briefly rather than dropping the caption (the caller gives
+  // up after a few seconds regardless, so later captions never pile up).
+  for (let attempt = 1; (res.status === 429 || res.status === 503) && attempt <= 2; attempt++) {
+    const retryAfter = parseFloat(res.headers.get('retry-after'));
+    const waitMs = Math.min(isNaN(retryAfter) ? 400 * attempt : retryAfter * 1000, 1500);
+    await new Promise(r => setTimeout(r, waitMs));
+    res = await send(params);
+  }
   if (res.status === 400 && params.context) {
     // If DeepL ever rejects the context for some language pair, a plain
     // translation beats no caption at all.

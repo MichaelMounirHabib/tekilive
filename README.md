@@ -37,9 +37,14 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
   stop DeepL adds to a fragment that stops mid-sentence is dropped. Only
   DeepL uses the context — Azure and MyMemory translate each chunk alone, so
   expect noticeably rougher captions on them.
-  To trade smoothness for speed, tune `commitAt` / `holdBack` in
-  `stream-chunker.js` — smaller numbers mean shorter, faster chunks but
-  choppier translations; larger numbers read better but lag more.
+  How much the translator sees at once is the presenter's **Caption pacing**
+  setting (remembered per browser, changeable mid-talk). Longer chunks
+  translate better but reach attendees later. Measured against translating
+  the same text in one go (similarity out of 100): **Fast** ≈ 82 at ~3s
+  behind, **Balanced** (default) ≈ 86 at ~5s, **Best quality** ≈ 89 at ~7s.
+  The exact sizes live in `PACES` in `stream-chunker.js`.
+- DeepL's free tier rate-limits bursts; `translate.js` waits out a `429`
+  briefly (up to two retries) instead of dropping the caption.
 - Attendees join by scanning a QR code (or opening the join link directly)
   with their own phone. No app install.
 - Attendees can also opt into hearing captions read aloud (a "Voice" toggle,
