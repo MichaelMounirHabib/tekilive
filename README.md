@@ -51,6 +51,21 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
   when the mic is blocked or missing. The chunker likewise copes with the
   recognizer discarding what it heard and starting a different phrase, so
   the words that follow are never swallowed.
+- **Speaking two languages.** The browser's speech engine listens in one
+  language at a time; speech in any other comes back as finished results with
+  no words in them. If the presenter sets **Also understand** to a second
+  language, the console counts those empty results and, after two close
+  together, switches the engine to the other language by itself (and back
+  again the same way), labelling each chunk with the language it was really
+  spoken in so it is translated from the right one. Changing **Speaker is
+  talking in** mid-talk also applies straight away. This is recovery, not true
+  mixed-language recognition: the words spoken before it notices are lost.
+  Single words in the other language inside a sentence are usually fine — the
+  engine writes them phonetically. For genuine mid-sentence switching a
+  speech service with language identification (e.g. Azure Speech) is needed.
+- Keep the presenter console in a visible window. Chrome delays speech
+  results from a hidden tab (they arrive in bursts, seconds late), so the
+  console warns when it is in the background while listening.
 - DeepL's free tier rate-limits bursts; `translate.js` waits out a `429`
   briefly (up to two retries) instead of dropping the caption.
 - Attendees join by scanning a QR code (or opening the join link directly)

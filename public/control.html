@@ -25,7 +25,7 @@
   .dot.live{background:#34D399; box-shadow:0 0 0 0 rgba(52,211,153,.6); animation:pulse 1.6s infinite;}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5);}70%{box-shadow:0 0 0 8px rgba(52,211,153,0);}100%{box-shadow:0 0 0 0 rgba(52,211,153,0);}}
 
-  .controls{display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:16px; align-items:end; background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
+  .controls{display:grid; grid-template-columns:1fr 1fr 1fr 1fr auto; gap:16px; align-items:end; background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
   label{display:block; font-size:12.5px; color:var(--gray); margin-bottom:7px; font-weight:500;}
   select, input{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:12px 22px; border-radius:10px; cursor:pointer; font-size:14px;}
@@ -126,6 +126,10 @@
       <select id="srcLang"></select>
     </div>
     <div>
+      <label for="altLang" title="If the speech engine keeps hearing sounds it can't turn into words, the console switches to this language by itself">Also understand</label>
+      <select id="altLang"></select>
+    </div>
+    <div>
       <label for="paceSelect">Caption pacing</label>
       <select id="paceSelect">
         <option value="fast">Fast — ~3s behind, rougher</option>
@@ -138,6 +142,7 @@
     </div>
   </div>
   <div id="micWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
+  <div id="bgWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;">This tab is in the background — Chrome delays speech results from a hidden tab, so captions will lag. Keep this window visible (for example side by side with the audience view).</div>
   <div id="micStatus" style="display:none; color:var(--gray); font-size:12.5px; margin:-14px 0 24px;"></div>
   <div id="translationWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
 
@@ -230,11 +235,38 @@ const LANGUAGES = [
 
 const RTL_LANGS = ['ar'];
 const srcSelect = document.getElementById('srcLang');
+const langInfo = (code) => LANGUAGES.find(l => l.code === code);
 LANGUAGES.forEach(l => {
   const opt = document.createElement('option');
   opt.value = l.code; opt.textContent = l.name;
   if (l.code === 'en') opt.selected = true;
   srcSelect.appendChild(opt);
+});
+
+// A second language the speaker also uses. The browser's speech engine can
+// only listen in one language at a time, so speech in the other one comes
+// back as nothing at all; with this set, the console notices that and
+// switches the engine over by itself (see noteMiss below).
+const altSelect = document.getElementById('altLang');
+const ALT_STORAGE_KEY = 'tekilive-alt-lang';
+function fillAltSelect(){
+  const keep = altSelect.value;
+  altSelect.innerHTML = '<option value="">None</option>';
+  LANGUAGES.filter(l => l.code !== srcSelect.value).forEach(l => {
+    const opt = document.createElement('option');
+    opt.value = l.code; opt.textContent = l.name;
+    altSelect.appendChild(opt);
+  });
+  altSelect.value = [...altSelect.options].some(o => o.value === keep) ? keep : '';
+}
+fillAltSelect();
+try {
+  const saved = localStorage.getItem(ALT_STORAGE_KEY);
+  if (saved && [...altSelect.options].some(o => o.value === saved)) altSelect.value = saved;
+} catch (e) {}
+altSelect.addEventListener('change', () => {
+  try { localStorage.setItem(ALT_STORAGE_KEY, altSelect.value); } catch (e) {}
+  dbg('alt-lang', altSelect.value || 'none');
 });
 
 const sessionInput = document.getElementById('sessionCode');
@@ -279,13 +311,17 @@ setInterval(() => {
   dbg('health', { ws: ws ? ws.readyState : 'none', engineRuns: !!recognition, speaking, lastResultAgoS: dbgLastResultAt ? Math.round((now - dbgLastResultAt) / 1000) : null,
     lastChunkAgoS: lastChunkAt ? Math.round((now - lastChunkAt) / 1000) : null, chunker: chunker ? chunker.state() : null, hidden: document.hidden });
 }, 5000);
-document.addEventListener('visibilitychange', () => dbg('tab', document.hidden ? 'hidden' : 'visible'));
+const bgWarning = document.getElementById('bgWarning');
+function refreshBgWarning(){ bgWarning.style.display = (listening && document.hidden) ? 'block' : 'none'; }
+document.addEventListener('visibilitychange', () => { dbg('tab', document.hidden ? 'hidden' : 'visible'); refreshBgWarning(); });
 
 const MAX_TRANSCRIPT_LINES = 60;
 
 let ws = null, recognition = null, listening = false, interimEl = null;
 let pendingInterimText = null, interimFrame = null;
 let restartFailures = 0, restartTimer = null, speaking = false, lastActivityAt = 0;
+let acceptResults = true; // false between a language switch and the new engine starting
+let engineLang = null, misses = [], lastSwitchAt = 0; // the language the speech engine is set to right now
 let chunker = null;
 
 function isNearBottom(el){
@@ -299,9 +335,14 @@ function trimFeed(){
 }
 
 function updateFeedDirection(){
-  originalFeed.dir = RTL_LANGS.includes(srcSelect.value) ? 'rtl' : 'ltr';
+  originalFeed.dir = RTL_LANGS.includes(engineLang || srcSelect.value) ? 'rtl' : 'ltr';
 }
-srcSelect.addEventListener('change', updateFeedDirection);
+srcSelect.addEventListener('change', () => {
+  fillAltSelect();
+  // Changing it mid-talk takes effect straight away, not at the next Start.
+  if (listening) switchEngineLanguage(srcSelect.value, 'you changed it');
+  else updateFeedDirection();
+});
 updateFeedDirection();
 
 function setupQr(){
@@ -513,6 +554,7 @@ function scheduleRestart(){
 function stopListening(warning){
   dbg('stop-listening', warning || 'user');
   listening = false;
+  refreshBgWarning();
   clearTimeout(restartTimer); restartTimer = null;
   try { recognition && recognition.stop(); } catch (e) {}
   toggleBtn.textContent = 'Start listening';
@@ -525,13 +567,13 @@ function buildRecognition(){
   const r = new SR();
   r.continuous = true;
   r.interimResults = true;
-  r.lang = LANGUAGES.find(l => l.code === srcSelect.value).speech;
+  r.lang = langInfo(engineLang || srcSelect.value).speech;
   // A run we've already replaced can still fire late events; ignore them.
   const current = () => r === recognition;
-  r.onresult = (e) => { if (!current()) return; lastActivityAt = Date.now(); handleResult(e); };
+  r.onresult = (e) => { if (!current() || !acceptResults) return; lastActivityAt = Date.now(); handleResult(e); };
   r.onstart = () => {
     if (!current()) return;
-    restartFailures = 0; speaking = false; lastActivityAt = Date.now();
+    restartFailures = 0; speaking = false; lastActivityAt = Date.now(); acceptResults = true;
     dbg('engine-start', r.lang);
     showMicWarning('');
     setMicStatus('Listening…');
@@ -569,6 +611,44 @@ function buildRecognition(){
 // but nothing has come back for a while, drop that run and start a new one,
 // which skips the part it couldn't understand and carries on.
 const STUCK_MS = 12000;
+
+// Ends the current run so a fresh one starts (with whatever language is now
+// set). abort() normally ends it and the restart follows on its own; if the
+// run is too wedged even to end, replace it anyway.
+function restartEngine(){
+  const old = recognition;
+  try { old && old.abort(); } catch (e) {}
+  setTimeout(() => { if (listening && recognition === old) startRecognition(); }, 1500);
+}
+
+// Speech that the engine heard but couldn't turn into any words — it hands
+// back a finished result with nothing in it — is what speaking the *other*
+// language sounds like to it (or plain noise). Two of those close together
+// and, if a second language is set, switch the engine to it.
+const MISS_WINDOW_MS = 25000, MIN_SWITCH_GAP_MS = 8000, MISSES_TO_SWITCH = 2;
+function noteMiss(why){
+  const now = Date.now();
+  misses = misses.filter(t => now - t < MISS_WINDOW_MS);
+  misses.push(now);
+  dbg('miss', `${misses.length}/${MISSES_TO_SWITCH} (${why}) engine=${engineLang}`);
+  const alt = altSelect.value;
+  if (!alt || !listening || misses.length < MISSES_TO_SWITCH || now - lastSwitchAt < MIN_SWITCH_GAP_MS) return;
+  switchEngineLanguage(engineLang === srcSelect.value ? alt : srcSelect.value, `couldn't make out ${langInfo(engineLang).name}`);
+}
+
+function switchEngineLanguage(code, why){
+  if (!code || code === engineLang) return;
+  dbg('LANG-SWITCH', `${engineLang} -> ${code} (${why})`);
+  if (chunker) chunker.flush();        // send what's pending, still labelled with the old language
+  engineLang = code;
+  chunker = makeChunker();             // tokenizing/cut rules depend on the language
+  misses = []; lastSwitchAt = Date.now();
+  acceptResults = false;               // the old engine's late words must not reach the new chunker
+  updateFeedDirection();
+  setMicStatus(`Now listening in ${langInfo(code).name} — ${why}`);
+  if (listening) restartEngine();
+}
+
 setInterval(() => {
   if (!listening || !recognition || !speaking) return;
   if (Date.now() - lastActivityAt < STUCK_MS) return;
@@ -576,11 +656,9 @@ setInterval(() => {
   dbg('WATCHDOG', `speech heard, no words for ${Math.round((Date.now() - lastActivityAt) / 1000)}s — restarting engine`);
   setMicStatus('Couldn’t make out that part — carrying on…');
   speaking = false; lastActivityAt = Date.now();
-  const stuck = recognition;
-  try { stuck.abort(); } catch (e) {}
-  // abort() normally ends the run and the restart follows; if the run is too
-  // wedged even to end, replace it anyway.
-  setTimeout(() => { if (listening && recognition === stuck) startRecognition(); }, 1500);
+  const before = engineLang;
+  noteMiss('watchdog');
+  if (engineLang === before && recognition && !restartTimer) restartEngine();
 }, 2000);
 
 // Web Speech fires onresult many times a second while the speaker talks;
@@ -626,7 +704,7 @@ function sendChunk(text, segmentEnd){
   }
   lastChunkAt = Date.now();
   dbg('chunk-sent', `${text.split(/\s+/).length}w end=${segmentEnd} "${text.slice(0, 70)}"`);
-  ws.send(JSON.stringify({ type:'final_transcript', text, segmentEnd, srcLang: srcSelect.value }));
+  ws.send(JSON.stringify({ type:'final_transcript', text, segmentEnd, srcLang: engineLang || srcSelect.value }));
 }
 
 // How much the translator gets to see at once: longer chunks translate
@@ -639,7 +717,7 @@ try {
 } catch (e) { paceSelect.value = 'balanced'; }
 
 function makeChunker(){
-  return StreamChunker.createChunker({ lang: srcSelect.value, pace: paceSelect.value, onChunk: sendChunk });
+  return StreamChunker.createChunker({ lang: engineLang || srcSelect.value, pace: paceSelect.value, onChunk: sendChunk });
 }
 
 paceSelect.addEventListener('change', () => {
@@ -657,16 +735,18 @@ function handleResult(event){
     dbg('result', `[${shape}] from#${event.resultIndex} …${((lastR && lastR[0] && lastR[0].transcript) || '').slice(-50)}`);
   }
   dbgLastResultAt = nowMs;
-  let interim = '', finalText = '';
+  let interim = '', finalText = '', emptyResults = 0;
   for (let i = event.resultIndex; i < event.results.length; i++){
     const res = event.results[i];
     const t = (res[0] && res[0].transcript) || '';
     if (res.isFinal) finalText += t + ' '; else interim += t;
+    if (res.isFinal && !t.trim()) emptyResults++;
   }
   // The chunker gets the recognizer's whole results list, not just the
   // changed part: one stretch of speech can arrive as several non-final
   // results at once, and it has to see them together to avoid resending.
   chunker.update(Array.from(event.results, r => ({ text: (r[0] && r[0].transcript) || '', isFinal: r.isFinal })));
+  for (let k = 0; k < emptyResults; k++) noteMiss('empty result'); // may switch language, so only now
   if (interim){
     pendingInterimText = interim;
     scheduleInterimRender();
@@ -686,8 +766,10 @@ function handleResult(event){
 toggleBtn.addEventListener('click', () => {
   if (!listening){
     showMicWarning('');
+    engineLang = srcSelect.value; misses = [];
     chunker = makeChunker();
     listening = true;
+    refreshBgWarning();
     restartFailures = 0;
     toggleBtn.textContent = 'Stop listening';
     statusDot.classList.add('live');
