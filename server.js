@@ -3,6 +3,8 @@ if (process.env.NODE_ENV !== 'production') require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
+const util = require('util');
 const multer = require('multer');
 const { WebSocketServer } = require('ws');
 const { translate } = require('./translate');
@@ -19,6 +21,20 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.status(200).send('ok'));
+
+// Debug aid: lets the presenter console report what its speech engine and
+// caption pipeline are doing, into the same log as the server's own lines,
+// so a freeze can be traced end to end. Off unless CLIENT_LOG=1, since it
+// records transcripts and accepts posts from anyone who can reach the server.
+app.post('/api/client-log', (req, res) => {
+  if (process.env.CLIENT_LOG !== '1') return res.status(404).end();
+  const body = req.body || {};
+  const tag = `[client ${String(body.session || '?').slice(0, 12)}]`;
+  (Array.isArray(body.events) ? body.events.slice(0, 200) : []).forEach((e) => {
+    log(tag, String(e && e.t || ''), String(e && e.kind || '').slice(0, 40), String(e && e.detail != null ? e.detail : '').slice(0, 400));
+  });
+  res.json({ ok: true });
+});
 
 app.post('/api/auth/login', async (req, res) => {
   if (!db.isEnabled() || !auth.isEnabled()) return res.status(503).json({ error: 'Accounts are not configured on this deployment' });
@@ -261,8 +277,19 @@ function safeSend(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(payload);
 }
 
+// Optional: also write the log to a file (LOG_FILE=tekilive-debug.log), so a
+// problem seen on stage can be looked at afterwards without having been
+// watching the terminal. Off by default.
+const LOG_FILE = process.env.LOG_FILE ? path.resolve(__dirname, process.env.LOG_FILE) : null;
+if (LOG_FILE) {
+  try { if (fs.statSync(LOG_FILE).size > 5 * 1024 * 1024) fs.truncateSync(LOG_FILE, 0); } catch { /* no file yet */ }
+}
+
 function log(...args) {
-  console.log(`[${new Date().toISOString()}]`, ...args);
+  const stamp = `[${new Date().toISOString()}]`;
+  console.log(stamp, ...args);
+  if (LOG_FILE) fs.appendFile(LOG_FILE, `${stamp} ${util.format(...args)}
+`, () => {});
 }
 
 function sessionHasBranding(session) {

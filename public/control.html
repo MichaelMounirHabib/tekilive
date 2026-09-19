@@ -251,6 +251,36 @@ const micWarning = document.getElementById('micWarning');
 const translationWarning = document.getElementById('translationWarning');
 const micStatus = document.getElementById('micStatus');
 
+// Flight recorder: a rolling record of what the speech engine, the chunker
+// and the server connection are each doing, posted to the server every couple
+// of seconds (only if the server has CLIENT_LOG=1 — otherwise it answers 404
+// and this switches itself off). When captions stop, the last few seconds of
+// this say which stage went quiet: the engine, the chunker, or the link.
+const dbgBuf = [];
+let dbgEnabled = true, dbgLastResultAt = 0, lastChunkAt = 0;
+function dbg(kind, detail){
+  if (!dbgEnabled) return;
+  dbgBuf.push({ t: new Date().toISOString().slice(11, 23), kind, detail: typeof detail === 'string' ? detail : JSON.stringify(detail) });
+  if (dbgBuf.length > 400) dbgBuf.shift();
+}
+async function flushDbg(){
+  if (!dbgEnabled || !dbgBuf.length) return;
+  const events = dbgBuf.splice(0, 200);
+  try {
+    const res = await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ session: connectedCode, events }) });
+    if (res.status === 404) dbgEnabled = false;
+  } catch (e) { /* offline: drop it, never let logging affect captions */ }
+}
+setInterval(flushDbg, 2000);
+setInterval(() => {
+  if (!listening) return;
+  const now = Date.now();
+  dbg('health', { ws: ws ? ws.readyState : 'none', engineRuns: !!recognition, speaking, lastResultAgoS: dbgLastResultAt ? Math.round((now - dbgLastResultAt) / 1000) : null,
+    lastChunkAgoS: lastChunkAt ? Math.round((now - lastChunkAt) / 1000) : null, chunker: chunker ? chunker.state() : null, hidden: document.hidden });
+}, 5000);
+document.addEventListener('visibilitychange', () => dbg('tab', document.hidden ? 'hidden' : 'visible'));
+
 const MAX_TRANSCRIPT_LINES = 60;
 
 let ws = null, recognition = null, listening = false, interimEl = null;
@@ -367,8 +397,9 @@ function connectWs(){
   const socket = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
   ws = socket;
   lastServerMessageAt = Date.now();
-  socket.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); };
+  socket.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); dbg('ws-open', code); flushOutbox(); };
   socket.onclose = () => {
+    dbg('ws-close', socket.manualClose ? 'manual' : 'unexpected — reconnecting');
     // Flag lives on the socket itself, not a shared variable — closing this
     // socket to reconnect elsewhere must not race with the *new* socket's
     // own state (a shared flag reset by connectWs() before this fires would
@@ -383,6 +414,8 @@ function connectWs(){
     if (msg.type === 'stats') renderStats(msg);
     if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
     if (msg.type === 'branding') renderBranding(msg.branding);
+    if (msg.type === 'error') dbg('server-error', `${msg.lang}: ${msg.detail || msg.message}`);
+    if (msg.type === 'delivered') dbg('delivered', `${msg.lang} ${msg.latency}ms`);
     if (msg.type === 'error'){
       // Audiences silently get nothing when translation fails, so make it
       // obvious to the presenter instead of looking like a quiet room.
@@ -452,11 +485,18 @@ function showMicWarning(text){
 function startRecognition(){
   if (!listening) return;
   clearTimeout(restartTimer); restartTimer = null;
+  // A new run's results list starts over from index 0, so the chunker has to
+  // forget the old run — sending anything it still held first. Normally the
+  // old run's onend has already done this; it matters when a run is replaced
+  // without ever ending (a wedged engine), where skipping it makes the
+  // chunker ignore everything the new run hears.
+  if (chunker) chunker.flush();
   recognition = buildRecognition();
   try {
     recognition.start();
   } catch (e) {
     console.warn('Speech start failed:', e);
+    dbg('engine-start-FAILED', String(e && e.message || e));
     scheduleRestart();
   }
 }
@@ -464,12 +504,14 @@ function startRecognition(){
 function scheduleRestart(){
   if (!listening || restartTimer) return;
   restartFailures++;
+  dbg('engine-restart-scheduled', `attempt ${restartFailures}`);
   if (restartFailures >= 3) showMicWarning('Microphone connection is unstable — still retrying…');
   const delay = restartFailures <= 1 ? 0 : Math.min(300 * restartFailures, 3000);
   restartTimer = setTimeout(startRecognition, delay);
 }
 
 function stopListening(warning){
+  dbg('stop-listening', warning || 'user');
   listening = false;
   clearTimeout(restartTimer); restartTimer = null;
   try { recognition && recognition.stop(); } catch (e) {}
@@ -490,13 +532,15 @@ function buildRecognition(){
   r.onstart = () => {
     if (!current()) return;
     restartFailures = 0; speaking = false; lastActivityAt = Date.now();
+    dbg('engine-start', r.lang);
     showMicWarning('');
     setMicStatus('Listening…');
   };
-  r.onspeechstart = () => { if (!current()) return; speaking = true; lastActivityAt = Date.now(); };
-  r.onspeechend = () => { if (!current()) return; speaking = false; };
+  r.onspeechstart = () => { if (!current()) return; speaking = true; lastActivityAt = Date.now(); dbg('speech-start', ''); };
+  r.onspeechend = () => { if (!current()) return; speaking = false; dbg('speech-end', ''); };
   r.onerror = (e) => {
     if (!current()) return;
+    dbg('engine-error', e.error);
     if (e.error === 'no-speech' || e.error === 'aborted') return; // routine; onend restarts
     console.warn('Speech error:', e.error);
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
@@ -509,6 +553,7 @@ function buildRecognition(){
   };
   r.onend = () => {
     if (!current()) return;
+    dbg('engine-end', chunker ? chunker.state() : '');
     speaking = false;
     // Result indexes restart from 0 with each recognition run, so send
     // whatever was still being heard before the next run starts over.
@@ -528,6 +573,7 @@ setInterval(() => {
   if (!listening || !recognition || !speaking) return;
   if (Date.now() - lastActivityAt < STUCK_MS) return;
   console.warn('Speech engine heard speech but returned no words — restarting it');
+  dbg('WATCHDOG', `speech heard, no words for ${Math.round((Date.now() - lastActivityAt) / 1000)}s — restarting engine`);
   setMicStatus('Couldn’t make out that part — carrying on…');
   speaking = false; lastActivityAt = Date.now();
   const stuck = recognition;
@@ -556,8 +602,30 @@ function scheduleInterimRender(){
 // pause); now the chunker hands over small pieces as the speaker talks.
 // segmentEnd marks the piece that closes a phrase, so audience screens
 // know when to start a new line rather than keep appending to the last.
+// While the link to the server is down (a Wi-Fi blip; it reconnects on its
+// own within a couple of seconds) chunks are held here and sent on reconnect,
+// so the audience gets those words a moment late rather than never. Anything
+// held longer than this is stale by then and is dropped.
+const outbox = [];
+const OUTBOX_MAX_AGE_MS = 15000;
+function flushOutbox(){
+  const now = Date.now();
+  while (outbox.length){
+    const c = outbox.shift();
+    if (now - c.at <= OUTBOX_MAX_AGE_MS) sendChunk(c.text, c.segmentEnd);
+    else dbg('chunk-EXPIRED', `held ${Math.round((now - c.at) / 1000)}s: "${c.text.slice(0, 60)}"`);
+  }
+}
+
 function sendChunk(text, segmentEnd){
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN){
+    outbox.push({ text, segmentEnd, at: Date.now() });
+    if (outbox.length > 40) outbox.shift();
+    dbg('chunk-QUEUED', `server connection not open (state ${ws ? ws.readyState : 'none'}): "${text.slice(0, 60)}"`);
+    return;
+  }
+  lastChunkAt = Date.now();
+  dbg('chunk-sent', `${text.split(/\s+/).length}w end=${segmentEnd} "${text.slice(0, 70)}"`);
   ws.send(JSON.stringify({ type:'final_transcript', text, segmentEnd, srcLang: srcSelect.value }));
 }
 
@@ -580,6 +648,15 @@ paceSelect.addEventListener('change', () => {
 });
 
 function handleResult(event){
+  // Log a compact picture of what the engine just handed over (F = final,
+  // i = still changing, with word counts), at most a few times a second.
+  const nowMs = Date.now();
+  if (nowMs - dbgLastResultAt > 600 || Array.from(event.results).some(r => r.isFinal)){
+    const shape = Array.from(event.results, r => `${r.isFinal ? 'F' : 'i'}${((r[0] && r[0].transcript) || '').trim().split(/\s+/).filter(Boolean).length}`).join(' ');
+    const lastR = event.results[event.results.length - 1];
+    dbg('result', `[${shape}] from#${event.resultIndex} …${((lastR && lastR[0] && lastR[0].transcript) || '').slice(-50)}`);
+  }
+  dbgLastResultAt = nowMs;
   let interim = '', finalText = '';
   for (let i = event.resultIndex; i < event.results.length; i++){
     const res = event.results[i];

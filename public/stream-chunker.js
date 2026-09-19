@@ -120,6 +120,7 @@
     let tokens = [];      // latest tokens of that phrase's text
     let sent = [];        // the tokens those already-sent chunks covered
     let idleTimer = null;
+    let lastKey = '';     // the text as of the last update, to tell real changes from repeats
 
     function realign() {
       const kept = reconcile(tokens, sent, committed);
@@ -158,7 +159,7 @@
 
     function reset() {
       clearIdle();
-      base = 0; committed = 0; tokens = []; sent = [];
+      base = 0; committed = 0; tokens = []; sent = []; lastKey = '';
     }
 
     return {
@@ -189,7 +190,11 @@
 
         realign();
 
-        armIdle();
+        // "The speaker paused" means the text stopped changing. A recognizer
+        // that keeps re-sending the same words (noise, confidence updates)
+        // must not keep pushing that timer back, or nothing is ever sent.
+        const key = tokens.join(' ');
+        if (key !== lastKey) { lastKey = key; armIdle(); }
         if (tokens.length - committed < cfg.commitAt) return;
 
         // Everything but the unstable tail is committable; prefer to cut at
@@ -227,6 +232,9 @@
         if (tokens.length > committed) emit(tokens.slice(committed), true);
         reset();
       },
+
+      // Read-only snapshot for diagnostics.
+      state() { return { base, committed, tokens: tokens.length, idleArmed: !!idleTimer }; },
 
       reset,
     };

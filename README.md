@@ -89,6 +89,8 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | `DATABASE_URL` | for accounts | *(empty)* | Postgres connection string. Only needed for presenter-console login and the admin overview — see Accounts below |
 | `SESSION_SECRET` | for accounts | *(empty)* | Random string used to sign login sessions. Required alongside `DATABASE_URL` for accounts to activate |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first deploy only | *(empty)* | Bootstraps one admin account on startup if no admin exists yet. Safe to leave set — bootstrap is a no-op once that admin already exists |
+| `LOG_FILE` | no | *(empty)* | Also write the server log to this file (relative to the app folder), e.g. `tekilive-debug.log`. Handy for looking at a problem afterwards; kept under 5MB |
+| `CLIENT_LOG` | no | *(empty)* | Set to `1` to let the presenter console report what its speech engine and caption pipeline are doing into the same log (includes transcript snippets). Leave off in production |
 
 Copy `.env.example` to `.env` for local runs if you want to set these; most
 hosting platforms let you set them directly in their dashboard instead.
