@@ -4,10 +4,16 @@
  * still talking, instead of waiting for the browser to mark the whole
  * phrase final (which only happens after a pause).
  *
- * Feed it every recognition result via update(); it calls onChunk(text,
- * segmentEnd) whenever it has a chunk ready. segmentEnd is true when the
- * chunk closes out the current phrase (the recognizer finalized it, or the
- * speaker went quiet), so listeners know when to start a new line.
+ * Feed it the recognizer's full results list on every result event via
+ * update(); it calls onChunk(text, segmentEnd) whenever it has a chunk
+ * ready. segmentEnd is true when the chunk closes out the current phrase
+ * (the recognizer finalized it, or it was flushed), so listeners know when
+ * to start a new line.
+ *
+ * Chrome may report one stretch of speech as several not-yet-final results
+ * at once (e.g. a steadier front part plus a still-changing tail), so the
+ * chunker never tracks results one by one: everything since the last
+ * finalized result is treated as a single running text.
  *
  * Loaded as a plain <script> in the presenter console; also require()-able
  * from Node for testing.
@@ -35,9 +41,9 @@
 
   function createChunker(options) {
     const cfg = Object.assign({ lang: 'en' }, DEFAULTS, LANG_DEFAULTS[options.lang], options);
-    let index = -1;       // which recognition result we're tracking
-    let committed = 0;    // tokens of that result already sent
-    let tokens = [];      // latest tokens of that result
+    let base = 0;         // first result of the phrase still being spoken
+    let committed = 0;    // tokens of that phrase's text already sent
+    let tokens = [];      // latest tokens of that phrase's text
     let idleTimer = null;
 
     function emit(slice, segmentEnd) {
@@ -62,22 +68,38 @@
       }, cfg.idleMs);
     }
 
+    function textOf(results, from, to) {
+      const parts = [];
+      for (let i = from; i < to; i++) parts.push(results[i].text);
+      return parts.join(' ');
+    }
+
     function reset() {
       clearIdle();
-      index = -1; committed = 0; tokens = [];
+      base = 0; committed = 0; tokens = [];
     }
 
     return {
-      update(resultIndex, text, isFinal) {
-        if (resultIndex !== index) { index = resultIndex; committed = 0; }
-        tokens = tokenize(text, cfg.lang);
+      // results: the recognizer's whole list for the current run, as
+      // [{ text, isFinal }, ...] in order.
+      update(results) {
+        if (base > results.length) reset(); // recognizer restarted: list started over
 
-        if (isFinal) {
-          const rest = tokens.slice(committed);
-          reset();
+        // Leading finalized results close out the phrase: send whatever of
+        // them hasn't gone out yet, marked as the end of the phrase.
+        let end = base;
+        while (end < results.length && results[end].isFinal) end++;
+        if (end > base) {
+          const finalTokens = tokenize(textOf(results, base, end), cfg.lang);
+          const rest = finalTokens.slice(committed);
+          // Chunks already sent may reach into the not-yet-final text after it.
+          committed = Math.max(0, committed - finalTokens.length);
+          base = end;
           emit(rest, true);
-          return;
         }
+
+        tokens = tokenize(textOf(results, base, results.length), cfg.lang);
+        if (tokens.length === 0) { clearIdle(); return; }
 
         armIdle();
         if (tokens.length - committed < cfg.commitAt) return;
@@ -94,7 +116,7 @@
 
       // Recognizer stopped/restarted without finalizing: send what's left.
       flush() {
-        if (index !== -1 && tokens.length > committed) emit(tokens.slice(committed), true);
+        if (tokens.length > committed) emit(tokens.slice(committed), true);
         reset();
       },
 

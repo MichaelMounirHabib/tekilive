@@ -483,9 +483,12 @@ function handleResult(event){
   for (let i = event.resultIndex; i < event.results.length; i++){
     const res = event.results[i];
     const t = res[0].transcript;
-    chunker.update(i, t, res.isFinal);
     if (res.isFinal) finalText += t + ' '; else interim += t;
   }
+  // The chunker gets the recognizer's whole results list, not just the
+  // changed part: one stretch of speech can arrive as several non-final
+  // results at once, and it has to see them together to avoid resending.
+  chunker.update(Array.from(event.results, r => ({ text: r[0].transcript, isFinal: r.isFinal })));
   if (interim){
     pendingInterimText = interim;
     scheduleInterimRender();
