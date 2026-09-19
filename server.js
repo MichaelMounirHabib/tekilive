@@ -180,6 +180,7 @@ const wss = new WebSocketServer({
  *   speakers: Set<ws>,
  *   audience: Map<ws, { lang }>,
  *   branding: { eventName, orgName, eventLogo: {mime,data}|null, orgLogo: {mime,data}|null },
+ *   deliveryTails: Map<lang, Promise>, // keeps each language's captions in spoken order
  * }>
  */
 const sessions = new Map();
@@ -190,9 +191,29 @@ function getSession(code) {
       speakers: new Set(),
       audience: new Map(),
       branding: { eventName: '', orgName: '', eventLogo: null, orgLogo: null },
+      deliveryTails: new Map(),
     });
   }
   return sessions.get(code);
+}
+
+// Runs `deliver` once everything queued before it for this language has
+// been delivered. `deliver` must handle its own errors, so one failure
+// can't break the chain for every later caption.
+function enqueueDelivery(session, lang, deliver) {
+  const previous = session.deliveryTails.get(lang) || Promise.resolve();
+  session.deliveryTails.set(lang, previous.then(deliver));
+}
+
+// A hung translation call would otherwise hold up every later caption in
+// that language (they're delivered in order), so give up on it eventually.
+const TRANSLATION_TIMEOUT_MS = 6000;
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`translation timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function activeLanguages(session) {
@@ -271,33 +292,60 @@ wss.on('connection', (ws, req) => {
     safeSend(ws, JSON.stringify({ type: 'joined', role: 'speaker', session: sessionCode, branding: brandingMeta(session) }));
     broadcastStats(session);
 
-    ws.on('message', async (raw) => {
+    // The console sends the transcript in small chunks while the speaker is
+    // still talking (see public/stream-chunker.js), not one message per
+    // finished phrase. segmentEnd marks the chunk that closes a phrase.
+    ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       if (msg.type !== 'final_transcript') return;
 
-      const { text, srcLang } = msg;
+      const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+      const srcLang = msg.srcLang;
+      const segmentEnd = msg.segmentEnd !== false; // older consoles never send it: one phrase per message
       const start = Date.now();
+
+      if (!text) {
+        // Phrase ended with nothing new to translate — let audiences know
+        // so their next caption starts a fresh line. Queued behind any
+        // captions still being translated so it can't overtake them.
+        if (segmentEnd) {
+          const endPayload = JSON.stringify({ type: 'segment_end' });
+          activeLanguages(session).forEach((lang) => enqueueDelivery(session, lang, () => {
+            session.audience.forEach((meta, client) => { if (meta.lang === lang) safeSend(client, endPayload); });
+          }));
+        }
+        return;
+      }
+
       const langs = activeLanguages(session);
-      log(`[${sessionCode}] final_transcript (${text.length} chars, srcLang=${srcLang}) — active target languages: [${langs.join(', ') || 'none'}], audience=${session.audience.size}`);
+      log(`[${sessionCode}] transcript chunk (${text.length} chars, srcLang=${srcLang}, segmentEnd=${segmentEnd}) — active target languages: [${langs.join(', ') || 'none'}], audience=${session.audience.size}`);
       if (langs.length === 0) {
         log(`[${sessionCode}] no audience listening in any language yet — nothing to translate`);
         return;
       }
 
-      await Promise.all(langs.map(async (lang) => {
-        try {
-          const translated = await translate(text, srcLang, lang);
-          const latency = Date.now() - start;
-          log(`[${sessionCode}] translated ${srcLang}->${lang} in ${latency}ms: "${translated.slice(0, 60)}"`);
-          const payload = JSON.stringify({ type: 'caption', lang, text: translated, latency, ts: Date.now() });
-          session.audience.forEach((meta, client) => { if (meta.lang === lang) safeSend(client, payload); });
-          session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'delivered', lang, text: translated, latency })));
-        } catch (err) {
-          log(`[${sessionCode}] TRANSLATION FAILED ${srcLang}->${lang}:`, err && err.stack ? err.stack : err);
-          session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message: 'translation failed' })));
-        }
-      }));
+      langs.forEach((lang) => {
+        // Translate right away so chunks overlap in flight, but deliver each
+        // language's chunks strictly in the order they were spoken — with
+        // several chunks a second apart, a slow API call must not let a
+        // later chunk overtake an earlier one on the audience's screen.
+        const pending = withTimeout(translate(text, srcLang, lang), TRANSLATION_TIMEOUT_MS);
+        pending.catch(() => {}); // failure is reported at delivery time below
+        enqueueDelivery(session, lang, async () => {
+          try {
+            const translated = await pending;
+            const latency = Date.now() - start;
+            log(`[${sessionCode}] translated ${srcLang}->${lang} in ${latency}ms: "${translated.slice(0, 60)}"`);
+            const payload = JSON.stringify({ type: 'caption', lang, text: translated, segmentEnd, latency, ts: Date.now() });
+            session.audience.forEach((meta, client) => { if (meta.lang === lang) safeSend(client, payload); });
+            session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'delivered', lang, text: translated, latency })));
+          } catch (err) {
+            log(`[${sessionCode}] TRANSLATION FAILED ${srcLang}->${lang}:`, err && err.stack ? err.stack : err);
+            session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message: 'translation failed' })));
+          }
+        });
+      });
     });
 
     ws.on('close', () => {

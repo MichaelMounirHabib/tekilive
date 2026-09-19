@@ -214,14 +214,26 @@ function isNearBottom(el){
   return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
 }
 
-function addCaptionLine(text){
+// Captions now arrive a few words at a time while the speaker is still
+// talking. Keep adding to the current line until the phrase ends (or the
+// line gets long) so it reads as flowing text, not a stack of fragments.
+const MAX_LINE_CHARS = 240;
+let openLine = null;
+
+function addCaptionLine(text, segmentEnd, lang){
   const placeholder = document.getElementById('capPlaceholder');
   if (placeholder) placeholder.remove();
   const wasNearBottom = isNearBottom(capFeed);
-  const line = document.createElement('div');
-  line.className = 'cap-line';
-  line.textContent = text;
-  capFeed.appendChild(line);
+  if (openLine && openLine.isConnected && openLine.textContent.length < MAX_LINE_CHARS){
+    openLine.textContent += (lang === 'zh' ? '' : ' ') + text;
+  } else {
+    const line = document.createElement('div');
+    line.className = 'cap-line';
+    line.textContent = text;
+    capFeed.appendChild(line);
+    openLine = line;
+  }
+  if (segmentEnd) openLine = null;
   while (capFeed.children.length > MAX_CAPTION_LINES) capFeed.removeChild(capFeed.firstChild);
   if (wasNearBottom) capFeed.scrollTop = capFeed.scrollHeight;
   // iOS Safari has a known bug where a momentum-scroll container can stop
@@ -332,6 +344,7 @@ document.getElementById('changeBtn').addEventListener('click', () => {
   document.getElementById('captions').style.display = 'none';
   document.getElementById('picker').style.display = 'flex';
   capFeed.innerHTML = '<div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div>';
+  openLine = null;
 });
 
 const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
@@ -359,10 +372,11 @@ function connect(langCode){
     try {
       const msg = JSON.parse(evt.data);
       if (msg.type === 'caption'){
-        addCaptionLine(msg.text);
+        addCaptionLine(msg.text, msg.segmentEnd !== false, langCode);
         speakCaption(msg.text);
         statusText.textContent = `Live — ${msg.latency}ms`;
       }
+      if (msg.type === 'segment_end') openLine = null;
       if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
       if (msg.type === 'branding') renderBranding(msg.branding);
     } catch (err) {

@@ -16,10 +16,22 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 
 - A small Node.js server (Express + `ws`) sits in the middle: the
   presenter's mic feed goes to the server over a WebSocket, the server
-  translates each finished sentence into every language currently requested
-  by connected attendees, and fans results out — each phone only receives
-  the language it asked for. Nobody listening in a language means it's never
-  translated into that language.
+  translates it into every language currently requested by connected
+  attendees, and fans results out — each phone only receives the language
+  it asked for. Nobody listening in a language means it's never translated
+  into that language.
+- Captions stream while the speaker is still talking, rather than waiting
+  for a pause. The console (`public/stream-chunker.js`) watches the
+  browser's live interim transcript and sends a chunk of roughly 6-10 words
+  as soon as it has settled (holding back the last few words, which the
+  recognizer keeps revising, and preferring to cut at a comma or full stop).
+  The server translates each chunk immediately but delivers each language's
+  chunks strictly in spoken order, and attendee screens append chunks to the
+  current line until the phrase ends. Voice reads each chunk as it arrives.
+  To trade smoothness for speed, tune `commitAt` / `holdBack` in
+  `stream-chunker.js` — smaller numbers mean shorter, faster chunks but
+  choppier translations (translating a few words at a time gives the
+  translator less context than a whole sentence).
 - Attendees join by scanning a QR code (or opening the join link directly)
   with their own phone. No app install.
 - Attendees can also opt into hearing captions read aloud (a "Voice" toggle,

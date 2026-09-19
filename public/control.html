@@ -203,6 +203,7 @@
   </footer>
 </div>
 
+<script src="/stream-chunker.js"></script>
 <script>
 const LANGUAGES = [
   { code:'en', name:'English',    speech:'en-US' },
@@ -243,6 +244,7 @@ const MAX_TRANSCRIPT_LINES = 60;
 let ws = null, recognition = null, listening = false, interimEl = null;
 let pendingInterimText = null, interimFrame = null;
 let restartFailures = 0;
+let chunker = null;
 
 function isNearBottom(el){
   return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
@@ -421,6 +423,9 @@ function buildRecognition(){
   r.onstart = () => { restartFailures = 0; micWarning.style.display = 'none'; };
   r.onerror = (e) => { if (e.error !== 'no-speech') console.warn('Speech error:', e.error); };
   r.onend = () => {
+    // Result indexes restart from 0 with each recognition run, so send
+    // whatever was still being heard before the next run starts over.
+    if (chunker) chunker.flush();
     if (!listening) return;
     try {
       r.start();
@@ -453,34 +458,44 @@ function scheduleInterimRender(){
   });
 }
 
+// Sends a piece of the transcript for translation. Long talks used to wait
+// here for the browser to declare a whole phrase final (only after a
+// pause); now the chunker hands over small pieces as the speaker talks.
+// segmentEnd marks the piece that closes a phrase, so audience screens
+// know when to start a new line rather than keep appending to the last.
+function sendChunk(text, segmentEnd){
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type:'final_transcript', text, segmentEnd, srcLang: srcSelect.value }));
+}
+
 function handleResult(event){
-  let interim = '', finalChunk = '';
+  let interim = '', finalText = '';
   for (let i = event.resultIndex; i < event.results.length; i++){
-    const t = event.results[i][0].transcript;
-    if (event.results[i].isFinal) finalChunk += t + ' '; else interim += t;
+    const res = event.results[i];
+    const t = res[0].transcript;
+    chunker.update(i, t, res.isFinal);
+    if (res.isFinal) finalText += t + ' '; else interim += t;
   }
   if (interim){
     pendingInterimText = interim;
     scheduleInterimRender();
   }
-  if (finalChunk.trim()){
+  if (finalText.trim()){
     pendingInterimText = null;
     if (interimEl){ interimEl.remove(); interimEl = null; }
     const wasNearBottom = isNearBottom(originalFeed);
     const p = document.createElement('p');
-    p.textContent = finalChunk.trim();
+    p.textContent = finalText.trim();
     originalFeed.appendChild(p);
     trimFeed();
     if (wasNearBottom) originalFeed.scrollTop = originalFeed.scrollHeight;
-    if (ws && ws.readyState === WebSocket.OPEN){
-      ws.send(JSON.stringify({ type:'final_transcript', text: finalChunk.trim(), srcLang: srcSelect.value }));
-    }
   }
 }
 
 toggleBtn.addEventListener('click', () => {
   if (!listening){
     micWarning.style.display = 'none';
+    chunker = StreamChunker.createChunker({ lang: srcSelect.value, onChunk: sendChunk });
     recognition = buildRecognition();
     try {
       recognition.start();
