@@ -16,10 +16,60 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 
 - A small Node.js server (Express + `ws`) sits in the middle: the
   presenter's mic feed goes to the server over a WebSocket, the server
-  translates each finished sentence into every language currently requested
-  by connected attendees, and fans results out — each phone only receives
-  the language it asked for. Nobody listening in a language means it's never
-  translated into that language.
+  translates it into every language currently requested by connected
+  attendees, and fans results out — each phone only receives the language
+  it asked for. Nobody listening in a language means it's never translated
+  into that language.
+- Captions stream while the speaker is still talking, rather than waiting
+  for a pause. The console (`public/stream-chunker.js`) watches the
+  browser's live interim transcript and sends a chunk of roughly 6-10 words
+  as soon as it has settled (holding back the last few words, which the
+  recognizer keeps revising, and preferring to cut at a comma or full stop).
+  The server translates each chunk immediately but delivers each language's
+  chunks strictly in spoken order, and attendee screens append chunks to the
+  current line until the phrase ends. Voice reads each chunk as it arrives.
+- Translating a few words at a time is much worse than translating a whole
+  sentence, so three things claw the quality back: (1) DeepL is sent the
+  last ~300 characters of what the speaker just said as `context` — it reads
+  it to disambiguate but neither translates nor bills it; (2) chunks are cut
+  at commas/full stops where possible and never end on a linking word like
+  "for", "how" or "want" (English source only, for now); (3) the stray full
+  stop DeepL adds to a fragment that stops mid-sentence is dropped. Only
+  DeepL uses the context — Azure and MyMemory translate each chunk alone, so
+  expect noticeably rougher captions on them.
+  How much the translator sees at once is the presenter's **Caption pacing**
+  setting (remembered per browser, changeable mid-talk). Longer chunks
+  translate better but reach attendees later. Measured against translating
+  the same text in one go (similarity out of 100): **Fast** ≈ 82 at ~3s
+  behind, **Balanced** (default) ≈ 86 at ~5s, **Best quality** ≈ 89 at ~7s.
+  The exact sizes live in `PACES` in `stream-chunker.js`.
+- The browser's speech engine is treated as unreliable, because it is. It
+  stops by itself every so often, can fail to restart, and can hang on
+  something it can't make out. The console keeps restarting it with backoff
+  (and says so if the connection is unstable), replaces a run that has heard
+  speech but returned no words for ~12s, and stops with a clear message only
+  when the mic is blocked or missing. The chunker likewise copes with the
+  recognizer discarding what it heard and starting a different phrase, so
+  the words that follow are never swallowed.
+- **Speaking two languages** *(built but switched off for now — set
+  `ALT_LANG_ENABLED = true` in `public/control.html` to bring the option
+  back).* The browser's speech engine listens in one
+  language at a time; speech in any other comes back as finished results with
+  no words in them. If the presenter sets **Also understand** to a second
+  language, the console counts those empty results and, after two close
+  together, switches the engine to the other language by itself (and back
+  again the same way), labelling each chunk with the language it was really
+  spoken in so it is translated from the right one. Changing **Speaker is
+  talking in** mid-talk also applies straight away. This is recovery, not true
+  mixed-language recognition: the words spoken before it notices are lost.
+  Single words in the other language inside a sentence are usually fine — the
+  engine writes them phonetically. For genuine mid-sentence switching a
+  speech service with language identification (e.g. Azure Speech) is needed.
+- Keep the presenter console in a visible window. Chrome delays speech
+  results from a hidden tab (they arrive in bursts, seconds late), so the
+  console warns when it is in the background while listening.
+- DeepL's free tier rate-limits bursts; `translate.js` waits out a `429`
+  briefly (up to two retries) instead of dropping the caption.
 - Attendees join by scanning a QR code (or opening the join link directly)
   with their own phone. No app install.
 - Attendees can also opt into hearing captions read aloud (a "Voice" toggle,
@@ -56,6 +106,8 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | `DATABASE_URL` | for accounts | *(empty)* | Postgres connection string. Only needed for presenter-console login and the admin overview — see Accounts below |
 | `SESSION_SECRET` | for accounts | *(empty)* | Random string used to sign login sessions. Required alongside `DATABASE_URL` for accounts to activate |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first deploy only | *(empty)* | Bootstraps one admin account on startup if no admin exists yet. Safe to leave set — bootstrap is a no-op once that admin already exists |
+| `LOG_FILE` | no | *(empty)* | Also write the server log to this file (relative to the app folder), e.g. `tekilive-debug.log`. Handy for looking at a problem afterwards; kept under 5MB |
+| `CLIENT_LOG` | no | *(empty)* | Set to `1` to let the presenter console report what its speech engine and caption pipeline are doing into the same log (includes transcript snippets). Leave off in production |
 
 Copy `.env.example` to `.env` for local runs if you want to set these; most
 hosting platforms let you set them directly in their dashboard instead.
