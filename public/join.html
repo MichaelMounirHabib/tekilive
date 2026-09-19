@@ -236,7 +236,13 @@ function addCaptionLine(text, segmentEnd, lang){
   if (placeholder) placeholder.remove();
   const wasNearBottom = isNearBottom(capFeed);
   if (openLine && openLine.isConnected && openLine.textContent.length < MAX_LINE_CHARS){
-    openLine.textContent += (lang === 'zh' ? '' : ' ') + text;
+    const soFar = openLine.textContent;
+    // The translator adds its own punctuation to each fragment, so two
+    // pieces can meet as "minutes, , I'd like" — drop the duplicate comma,
+    // and never leave a space before punctuation that opens a piece.
+    if (/[,،]\s*$/.test(soFar)) text = text.replace(/^\s*[,،]\s*/, '');
+    const glue = (lang === 'zh' || /^[,.;:!?،؛؟。，]/.test(text)) ? '' : ' ';
+    openLine.textContent = soFar + glue + text;
   } else {
     const line = document.createElement('div');
     line.className = 'cap-line';

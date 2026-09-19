@@ -28,10 +28,18 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
   The server translates each chunk immediately but delivers each language's
   chunks strictly in spoken order, and attendee screens append chunks to the
   current line until the phrase ends. Voice reads each chunk as it arrives.
+- Translating a few words at a time is much worse than translating a whole
+  sentence, so three things claw the quality back: (1) DeepL is sent the
+  last ~300 characters of what the speaker just said as `context` — it reads
+  it to disambiguate but neither translates nor bills it; (2) chunks are cut
+  at commas/full stops where possible and never end on a linking word like
+  "for", "how" or "want" (English source only, for now); (3) the stray full
+  stop DeepL adds to a fragment that stops mid-sentence is dropped. Only
+  DeepL uses the context — Azure and MyMemory translate each chunk alone, so
+  expect noticeably rougher captions on them.
   To trade smoothness for speed, tune `commitAt` / `holdBack` in
   `stream-chunker.js` — smaller numbers mean shorter, faster chunks but
-  choppier translations (translating a few words at a time gives the
-  translator less context than a whole sentence).
+  choppier translations; larger numbers read better but lag more.
 - Attendees join by scanning a QR code (or opening the join link directly)
   with their own phone. No app install.
 - Attendees can also opt into hearing captions read aloud (a "Voice" toggle,

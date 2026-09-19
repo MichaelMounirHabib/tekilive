@@ -30,6 +30,24 @@
   const LANG_DEFAULTS = { zh: { commitAt: 14, holdBack: 4, minChunk: 6 } };
   const BREAK_RE = /[.!?;:,،؛؟。！？；：，]$/;
 
+  // Words a chunk shouldn't end on ("thank you for | joining us"): cut there
+  // and the translator gets a sentence with a missing piece and guesses
+  // wrong. English only for now; other source languages just skip this.
+  const DANGLING = {
+    en: new Set(('a an the of to in on at for with by from about into over across through as than ' +
+      'and but or so because if when while that which who whom whose how what why where ' +
+      'is are was were be been am do does did can could will would should may might must not ' +
+      // verbs that take "to": ending on "I want" leaves "to talk" for the
+      // next chunk, and both sides then translate their own "to"
+      'want wants wanted need needs going trying able thank thanks ' +
+      'i we you he she it they my our your his her its their this these those there').split(' ')),
+  };
+
+  function dangles(token, lang) {
+    const set = DANGLING[lang];
+    return !!set && set.has(token.toLowerCase().replace(/[^a-z']/g, ''));
+  }
+
   function tokenize(text, lang) {
     if (lang === 'zh') return Array.from(text.replace(/\s+/g, ''));
     return text.trim().split(/\s+/).filter(Boolean);
@@ -107,8 +125,16 @@
         // Everything but the unstable tail is committable; prefer to cut at
         // a clause/sentence boundary so chunks translate as whole thoughts.
         let cut = tokens.length - cfg.holdBack;
+        let atBoundary = false;
         for (let i = cut - 1; i >= committed + cfg.minChunk - 1; i--) {
-          if (BREAK_RE.test(tokens[i])) { cut = i + 1; break; }
+          if (BREAK_RE.test(tokens[i])) { cut = i + 1; atBoundary = true; break; }
+        }
+        // No punctuation to cut at: at least don't strand a linking word at
+        // the end of the chunk — hand it to the next chunk instead. May back
+        // off below minChunk here ("good morning everyone | and thank you…")
+        // since a short whole phrase beats a long broken one.
+        if (!atBoundary) {
+          while (cut - committed > 2 && dangles(tokens[cut - 1], cfg.lang)) cut--;
         }
         emit(tokens.slice(committed, cut), false);
         committed = cut;

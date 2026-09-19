@@ -181,6 +181,7 @@ const wss = new WebSocketServer({
  *   audience: Map<ws, { lang }>,
  *   branding: { eventName, orgName, eventLogo: {mime,data}|null, orgLogo: {mime,data}|null },
  *   deliveryTails: Map<lang, Promise>, // keeps each language's captions in spoken order
+ *   recentSource: { lang, text },      // tail of what the speaker just said, as translation context
  * }>
  */
 const sessions = new Map();
@@ -192,9 +193,32 @@ function getSession(code) {
       audience: new Map(),
       branding: { eventName: '', orgName: '', eventLogo: null, orgLogo: null },
       deliveryTails: new Map(),
+      recentSource: { lang: null, text: '' },
     });
   }
   return sessions.get(code);
+}
+
+// Translating a few words in isolation goes badly, so each chunk is sent
+// along with the last bit of what was said before it (never translated).
+const CONTEXT_CHARS = 300;
+function takeContext(session, srcLang, text) {
+  const prev = session.recentSource;
+  const context = prev.lang === srcLang ? prev.text : '';
+  const joined = `${context} ${text}`.trim();
+  // Keep the tail, starting on a word boundary rather than mid-word.
+  const tail = joined.length > CONTEXT_CHARS ? joined.slice(-CONTEXT_CHARS).replace(/^\S*\s/, '') : joined;
+  session.recentSource = { lang: srcLang, text: tail };
+  return context;
+}
+
+// The translator tends to close every fragment with a full stop, even when
+// the chunk stops mid-sentence. Drop it unless the speaker's own text ended
+// a sentence there, otherwise "…new possibilities. for every event" appears.
+const SENTENCE_END_RE = /[.!?…。！？؟]$/;
+function tidyChunk(translated, sourceText, segmentEnd) {
+  if (segmentEnd || SENTENCE_END_RE.test(sourceText)) return translated;
+  return translated.replace(/[.。]\s*$/, '');
 }
 
 // Runs `deliver` once everything queued before it for this language has
@@ -318,6 +342,10 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
+      // Recorded for every chunk, even with nobody listening yet, so an
+      // attendee joining mid-talk still gets context for what comes next.
+      const context = takeContext(session, srcLang, text);
+
       const langs = activeLanguages(session);
       log(`[${sessionCode}] transcript chunk (${text.length} chars, srcLang=${srcLang}, segmentEnd=${segmentEnd}) — active target languages: [${langs.join(', ') || 'none'}], audience=${session.audience.size}`);
       if (langs.length === 0) {
@@ -330,11 +358,11 @@ wss.on('connection', (ws, req) => {
         // language's chunks strictly in the order they were spoken — with
         // several chunks a second apart, a slow API call must not let a
         // later chunk overtake an earlier one on the audience's screen.
-        const pending = withTimeout(translate(text, srcLang, lang), TRANSLATION_TIMEOUT_MS);
+        const pending = withTimeout(translate(text, srcLang, lang, context), TRANSLATION_TIMEOUT_MS);
         pending.catch(() => {}); // failure is reported at delivery time below
         enqueueDelivery(session, lang, async () => {
           try {
-            const translated = await pending;
+            const translated = tidyChunk(await pending, text, segmentEnd);
             const latency = Date.now() - start;
             log(`[${sessionCode}] translated ${srcLang}->${lang} in ${latency}ms: "${translated.slice(0, 60)}"`);
             const payload = JSON.stringify({ type: 'caption', lang, text: translated, segmentEnd, latency, ts: Date.now() });
