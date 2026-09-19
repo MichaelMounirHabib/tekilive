@@ -80,12 +80,51 @@
     return tokens.join(lang === 'zh' ? '' : ' ');
   }
 
+  function norm(token) {
+    return token.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  }
+
+  // How many leading tokens of `next` and `sent` agree, allowing for the two
+  // to have parted ways somewhere: scans back from the end for the last spot
+  // where two words in a row still match.
+  function agreedPrefix(next, sent) {
+    const len = Math.min(next.length, sent.length);
+    for (let i = len - 1; i >= 1; i--) {
+      if (norm(next[i]) === norm(sent[i]) && norm(next[i - 1]) === norm(sent[i - 1])) return i + 1;
+    }
+    return 0;
+  }
+
+  // The recognizer keeps revising its guess, and sometimes throws it away
+  // (say, it couldn't make out a word) and starts a different one in the
+  // same slot. `committed` tokens have been sent, covering `sent`; given the
+  // text as it reads now, how many of them does it still stand behind?
+  // Counting blindly would skip the start of a replaced phrase, so compare
+  // the tail of what was sent: if most of it changed, find where the two
+  // parted ways and carry on from there. A word or two revised is normal
+  // and changes nothing.
+  function reconcile(next, sent, committed) {
+    if (!committed) return 0;
+    const len = Math.min(next.length, committed);
+    const win = Math.min(4, len);
+    if (win < 2) return committed; // too little text to judge yet
+    let differ = 0;
+    for (let i = len - win; i < len; i++) if (norm(next[i]) !== norm(sent[i])) differ++;
+    return differ * 2 > win ? agreedPrefix(next, sent) : committed;
+  }
+
   function createChunker(options) {
     const cfg = settingsFor(options);
     let base = 0;         // first result of the phrase still being spoken
     let committed = 0;    // tokens of that phrase's text already sent
     let tokens = [];      // latest tokens of that phrase's text
+    let sent = [];        // the tokens those already-sent chunks covered
     let idleTimer = null;
+
+    function realign() {
+      const kept = reconcile(tokens, sent, committed);
+      if (kept !== committed) { committed = kept; sent = sent.slice(0, kept); }
+    }
 
     function emit(slice, segmentEnd) {
       const text = join(slice, cfg.lang);
@@ -101,11 +140,13 @@
       idleTimer = setTimeout(() => {
         idleTimer = null;
         // Speaker paused mid-phrase and the recognizer hasn't finalized
-        // yet: everything heard so far has settled, so send it now.
-        if (tokens.length > committed) {
-          emit(tokens.slice(committed), false);
-          committed = tokens.length;
-        }
+        // yet: everything heard so far has settled, so send it now. If the
+        // recognizer took back words we'd already sent and has held steady
+        // since, this also carries on from where its text now stands.
+        realign();
+        if (tokens.length > committed) emit(tokens.slice(committed), false);
+        committed = tokens.length;
+        sent = tokens.slice();
       }, cfg.idleMs);
     }
 
@@ -117,7 +158,7 @@
 
     function reset() {
       clearIdle();
-      base = 0; committed = 0; tokens = [];
+      base = 0; committed = 0; tokens = []; sent = [];
     }
 
     return {
@@ -132,15 +173,21 @@
         while (end < results.length && results[end].isFinal) end++;
         if (end > base) {
           const finalTokens = tokenize(textOf(results, base, end), cfg.lang);
-          const rest = finalTokens.slice(committed);
+          // Where the final disagrees with what we sent, what we sent was a
+          // guess the recognizer dropped — the final is the real text.
+          const already = reconcile(finalTokens, sent, committed);
+          const rest = finalTokens.slice(already);
           // Chunks already sent may reach into the not-yet-final text after it.
-          committed = Math.max(0, committed - finalTokens.length);
+          committed = Math.max(0, already - finalTokens.length);
+          sent = sent.slice(0, already).slice(finalTokens.length);
           base = end;
           emit(rest, true);
         }
 
         tokens = tokenize(textOf(results, base, results.length), cfg.lang);
         if (tokens.length === 0) { clearIdle(); return; }
+
+        realign();
 
         armIdle();
         if (tokens.length - committed < cfg.commitAt) return;
@@ -161,6 +208,7 @@
         }
         emit(tokens.slice(committed, cut), false);
         committed = cut;
+        sent = tokens.slice(0, cut);
       },
 
       // Change the speed/quality trade-off while running. Done in place, not

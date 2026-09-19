@@ -43,6 +43,14 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
   the same text in one go (similarity out of 100): **Fast** ≈ 82 at ~3s
   behind, **Balanced** (default) ≈ 86 at ~5s, **Best quality** ≈ 89 at ~7s.
   The exact sizes live in `PACES` in `stream-chunker.js`.
+- The browser's speech engine is treated as unreliable, because it is. It
+  stops by itself every so often, can fail to restart, and can hang on
+  something it can't make out. The console keeps restarting it with backoff
+  (and says so if the connection is unstable), replaces a run that has heard
+  speech but returned no words for ~12s, and stops with a clear message only
+  when the mic is blocked or missing. The chunker likewise copes with the
+  recognizer discarding what it heard and starting a different phrase, so
+  the words that follow are never swallowed.
 - DeepL's free tier rate-limits bursts; `translate.js` waits out a `429`
   briefly (up to two retries) instead of dropping the caption.
 - Attendees join by scanning a QR code (or opening the join link directly)
