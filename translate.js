@@ -74,8 +74,14 @@ async function translateMyMemory(text, source, target) {
   const url = `https://api.mymemory.translated.net/get?${params.toString()}`;
   const res = await fetch(url);
   const data = await res.json();
-  if (data?.quotaFinished) throw new Error('MyMemory daily quota exhausted');
-  return data?.responseData?.translatedText || text;
+  const translated = data?.responseData?.translatedText;
+  // Quota and rate-limit problems come back in-band as a "successful" reply
+  // whose translatedText is the warning itself — without this check that
+  // warning gets fanned out to the audience as if it were a caption.
+  if (data?.quotaFinished || Number(data?.responseStatus) >= 400 || /^MYMEMORY WARNING/i.test(translated || '')) {
+    throw new Error(`MyMemory rejected the request (quota exhausted?): ${String(data?.responseDetails || translated || '').slice(0, 160)}`);
+  }
+  return translated || text;
 }
 
 async function translate(text, source, target) {

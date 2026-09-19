@@ -130,6 +130,7 @@
     </div>
   </div>
   <div id="micWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
+  <div id="translationWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
 
   <div class="panel" style="margin-bottom:24px;">
     <div class="panel-title">Event branding — shown to your audience</div>
@@ -238,6 +239,7 @@ const sessionBadge = document.getElementById('sessionBadge');
 const qrImg = document.getElementById('qrImg');
 const qrUrl = document.getElementById('qrUrl');
 const micWarning = document.getElementById('micWarning');
+const translationWarning = document.getElementById('translationWarning');
 
 const MAX_TRANSCRIPT_LINES = 60;
 
@@ -371,7 +373,15 @@ function connectWs(){
     if (msg.type === 'stats') renderStats(msg);
     if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
     if (msg.type === 'branding') renderBranding(msg.branding);
+    if (msg.type === 'error'){
+      // Audiences silently get nothing when translation fails, so make it
+      // obvious to the presenter instead of looking like a quiet room.
+      const l = LANGUAGES.find(x => x.code === msg.lang);
+      translationWarning.textContent = `Translation to ${l ? l.name : msg.lang} is failing — attendees are not receiving captions. ${msg.detail || ''}`;
+      translationWarning.style.display = 'block';
+    }
     if (msg.type === 'delivered'){
+      translationWarning.style.display = 'none';
       const el = document.getElementById('latencyValue');
       el.textContent = `${msg.latency}ms`;
       el.classList.toggle('warn', msg.latency > 2500);

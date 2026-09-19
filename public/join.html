@@ -54,11 +54,18 @@
   .size-btn:active{border-color:var(--violet); background:rgba(124,58,237,.14);}
   .size-btn:disabled{opacity:.35; cursor:not-allowed;}
 
-  .cap-feed{flex:1; display:flex; flex-direction:column; justify-content:flex-end; gap:14px; overflow-y:auto; scroll-behavior:smooth;}
+  /* Captions sit at the bottom of the screen. Done with margin-top:auto on the
+     first line rather than justify-content:flex-end — that one clips overflow
+     above the top edge where scrolling can't reach it, so older captions
+     became impossible to scroll back to. */
+  .cap-feed{flex:1; display:flex; flex-direction:column; gap:14px; overflow-y:auto; scroll-behavior:smooth;}
+  .cap-feed > :first-child{margin-top:auto;}
   .cap-line{font-size:calc(clamp(20px, 5.5vw, 28px) * var(--font-scale, 1)); line-height:1.5; font-weight:500; opacity:1; animation:capIn .3s ease-out;}
   .cap-line.placeholder{color:var(--gray); font-weight:400; font-size:16px; animation:none;}
   .cap-feed .cap-line:not(:last-child):nth-last-child(2){opacity:.55;}
   .cap-feed .cap-line:not(:last-child):not(:nth-last-child(2)){opacity:.3;}
+  /* Scrolled back to catch up: show everything at full strength to read. */
+  .cap-feed.reading-history .cap-line{opacity:1 !important;}
   @keyframes capIn{from{opacity:0; transform:translateY(10px);} to{transform:translateY(0);}}
 
   .cap-branding{flex-shrink:0; display:none; align-items:center; justify-content:center; gap:12px; padding-top:14px; margin-top:14px; border-top:1px solid var(--border);}
@@ -214,6 +221,10 @@ function isNearBottom(el){
   return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
 }
 
+capFeed.addEventListener('scroll', () => {
+  capFeed.classList.toggle('reading-history', !isNearBottom(capFeed));
+}, { passive: true });
+
 // Captions now arrive a few words at a time while the speaker is still
 // talking. Keep adding to the current line until the phrase ends (or the
 // line gets long) so it reads as flowing text, not a stack of fragments.
@@ -345,6 +356,7 @@ document.getElementById('changeBtn').addEventListener('click', () => {
   document.getElementById('picker').style.display = 'flex';
   capFeed.innerHTML = '<div class="cap-line placeholder" id="capPlaceholder">Waiting for the speaker to start…</div>';
   openLine = null;
+  capFeed.classList.remove('reading-history');
 });
 
 const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat

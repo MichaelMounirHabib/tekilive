@@ -342,7 +342,7 @@ wss.on('connection', (ws, req) => {
             session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'delivered', lang, text: translated, latency })));
           } catch (err) {
             log(`[${sessionCode}] TRANSLATION FAILED ${srcLang}->${lang}:`, err && err.stack ? err.stack : err);
-            session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message: 'translation failed' })));
+            session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message: 'translation failed', detail: String(err && err.message || err).slice(0, 200) })));
           }
         });
       });
