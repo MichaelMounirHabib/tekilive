@@ -51,7 +51,9 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
   when the mic is blocked or missing. The chunker likewise copes with the
   recognizer discarding what it heard and starting a different phrase, so
   the words that follow are never swallowed.
-- **Speaking two languages.** The browser's speech engine listens in one
+- **Speaking two languages** *(built but switched off for now — set
+  `ALT_LANG_ENABLED = true` in `public/control.html` to bring the option
+  back).* The browser's speech engine listens in one
   language at a time; speech in any other comes back as finished results with
   no words in them. If the presenter sets **Also understand** to a second
   language, the console counts those empty results and, after two close
