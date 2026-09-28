@@ -133,6 +133,7 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | `DEEPL_API_URL` | no | *(empty)* | Overrides the DeepL endpoint. Only for the load test's mock translator (`loadtest/`); leave unset |
 | `LOG_FILE` | no | *(empty)* | Also write the server log to this file (relative to the app folder), e.g. `tekilive-debug.log`. Handy for looking at a problem afterwards; kept under 5MB |
 | `CLIENT_LOG` | no | *(empty)* | Set to `1` to let the presenter console report what its speech engine and caption pipeline are doing into the same log (includes transcript snippets). Leave off in production |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | no | *(empty)* | Azure Application Insights connection string. When set, every audience join/leave is recorded so attendance per session survives restarts — see Audience analytics below |
 
 Copy `.env.example` to `.env` for local runs if you want to set these; most
 hosting platforms let you set them directly in their dashboard instead.
@@ -253,6 +254,29 @@ set them for local runs too. In production (`NODE_ENV=production`) the server
 also refuses to start without them. Once signed in,
 each page has a header link to the other. If the sign-in expires mid-talk, the
 console shows the sign-in screen again instead of retrying the connection.
+
+## Audience analytics
+
+Live session state is in memory, so attendance is recorded separately, as
+custom events in Azure Application Insights (`analytics.js`). Set
+`APPLICATIONINSIGHTS_CONNECTION_STRING`; without it nothing is recorded.
+
+- `AudienceJoin` — each time a phone connects: session code, language,
+  and the audience size right after it joined.
+- `AudienceLeave` — each disconnect: session code, last language, seconds
+  connected.
+
+Each phone sends a random anonymous id (kept in its browser's
+`localStorage`, no personal data), so a refresh or a dropped connection
+isn't counted as another attendee. Clearing site data or switching browser
+does count as a new one.
+
+In the Azure portal, open the **TekiLive attendance** workbook (Application
+Insights resource → Workbooks) for a per-session table: unique attendees,
+peak concurrent audience, connections, average minutes per attendee and
+languages, per session code per day (UTC). The underlying queries are in
+`analytics-queries/` if you'd rather paste them into **Logs**. Reusing the
+same session code on different days shows up as separate rows.
 
 ## Run it locally
 

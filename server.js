@@ -9,6 +9,9 @@ const multer = require('multer');
 const { WebSocketServer } = require('ws');
 const translator = require('./translate');
 const auth = require('./auth');
+const analytics = require('./analytics');
+
+const VISITOR_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
 const PORT = process.env.PORT || 3000;
 // Compared without case or a trailing "/", the usual typos when the value is
@@ -612,10 +615,19 @@ wss.on('connection', (ws, req) => {
     });
   } else {
     const lang = url.searchParams.get('lang') || 'en'; // checked in verifyClient
+    // Anonymous per-phone id kept by join.html, so a refresh or reconnect
+    // isn't counted as another attendee. Older pages don't send one.
+    const visitorId = VISITOR_ID_RE.test(url.searchParams.get('vid') || '') ? url.searchParams.get('vid') : '';
+    const joinedAt = Date.now();
     session.audience.set(ws, { lang });
     log(`[${sessionCode}] audience joined (lang=${lang}, audience=${session.audience.size})`);
     safeSend(ws, JSON.stringify({ type: 'joined', role: 'audience', session: sessionCode, lang, branding: brandingMeta(session) }));
     broadcastStats(session);
+    analytics.trackEvent('AudienceJoin', {
+      userId: visitorId,
+      properties: { session: sessionCode, lang, visitorId },
+      measurements: { audienceSize: session.audience.size },
+    });
 
     ws.on('message', (raw) => {
       let msg;
@@ -631,8 +643,14 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
+      const { lang: lastLang } = session.audience.get(ws) || { lang };
       session.audience.delete(ws);
       log(`[${sessionCode}] audience left (audience=${session.audience.size})`);
+      analytics.trackEvent('AudienceLeave', {
+        userId: visitorId,
+        properties: { session: sessionCode, lang: lastLang, visitorId },
+        measurements: { secondsConnected: Math.round((Date.now() - joinedAt) / 1000), audienceSize: session.audience.size },
+      });
       broadcastStats(session);
       pruneSessionIfEmpty(sessionCode, session);
     });

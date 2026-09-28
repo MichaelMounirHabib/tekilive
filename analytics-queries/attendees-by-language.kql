@@ -1,0 +1,8 @@
+// Unique attendees per session per language (UTC day).
+customEvents
+| where name == "AudienceJoin"
+| extend session = tostring(customDimensions.session),
+         lang = tostring(customDimensions.lang),
+         visitorId = tostring(customDimensions.visitorId)
+| summarize Attendees = count_distinct(visitorId) by Day = startofday(timestamp), Session = session, Language = lang
+| order by Day desc, Session asc, Attendees desc
