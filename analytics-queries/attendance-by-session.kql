@@ -1,0 +1,21 @@
+// Attendance per session code per day (UTC). Paste into the Application
+// Insights "Logs" blade, or open the "TekiLive attendance" workbook.
+customEvents
+| where name in ("AudienceJoin", "AudienceLeave")
+| extend session = tostring(customDimensions.session),
+         lang = tostring(customDimensions.lang),
+         visitorId = tostring(customDimensions.visitorId),
+         audienceSize = todouble(customMeasurements.audienceSize),
+         secondsConnected = todouble(customMeasurements.secondsConnected)
+| summarize
+    Attendees = count_distinctif(visitorId, name == "AudienceJoin" and isnotempty(visitorId)),
+    Connections = countif(name == "AudienceJoin"),
+    PeakConcurrent = maxif(audienceSize, name == "AudienceJoin"),
+    TotalMinutes = round(sumif(secondsConnected, name == "AudienceLeave") / 60, 1),
+    Languages = make_set_if(lang, name == "AudienceJoin"),
+    FirstJoin = minif(timestamp, name == "AudienceJoin"),
+    LastSeen = max(timestamp)
+    by Session = session, Day = startofday(timestamp)
+| extend AvgMinutesPerAttendee = iff(Attendees > 0, round(TotalMinutes / Attendees, 1), real(null))
+| project Day, Session, Attendees, PeakConcurrent, Connections, AvgMinutesPerAttendee, Languages, FirstJoin, LastSeen
+| order by Day desc, Attendees desc

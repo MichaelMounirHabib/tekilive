@@ -368,10 +368,23 @@ document.getElementById('changeBtn').addEventListener('click', () => {
 const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
 let lastServerMessageAt = Date.now(), staleWatchdog = null;
 
+// Random, anonymous id for this phone, so attendance counts people rather
+// than connections (a refresh or reconnect keeps the same id).
+const VISITOR_ID_STORAGE_KEY = 'tekilive.visitorId';
+const visitorId = (() => {
+  let id = null;
+  try { id = localStorage.getItem(VISITOR_ID_STORAGE_KEY); } catch (e) {}
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+    try { localStorage.setItem(VISITOR_ID_STORAGE_KEY, id); } catch (e) {}
+  }
+  return id;
+})();
+
 function connect(langCode){
   manualClose = false;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}?role=audience&session=${sessionCode}&lang=${langCode}`);
+  ws = new WebSocket(`${proto}://${location.host}?role=audience&session=${sessionCode}&lang=${langCode}&vid=${encodeURIComponent(visitorId)}`);
   lastServerMessageAt = Date.now();
   const dot = document.getElementById('capDot');
   const statusText = document.getElementById('capStatusText');
