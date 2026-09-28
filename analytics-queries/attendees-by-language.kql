@@ -4,5 +4,5 @@ customEvents
 | extend session = tostring(customDimensions.session),
          lang = tostring(customDimensions.lang),
          visitorId = tostring(customDimensions.visitorId)
-| summarize Attendees = count_distinct(visitorId) by Day = startofday(timestamp), Session = session, Language = lang
+| summarize Attendees = count_distinctif(visitorId, isnotempty(visitorId)) + countif(isempty(visitorId)) by Day = startofday(timestamp), Session = session, Language = lang
 | order by Day desc, Session asc, Attendees desc

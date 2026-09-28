@@ -8,7 +8,10 @@ customEvents
          audienceSize = todouble(customMeasurements.audienceSize),
          secondsConnected = todouble(customMeasurements.secondsConnected)
 | summarize
-    Attendees = count_distinctif(visitorId, name == "AudienceJoin" and isnotempty(visitorId)),
+    // Pages loaded before the per-phone id existed send none; count each of
+    // those joins as its own attendee rather than dropping it.
+    Attendees = count_distinctif(visitorId, name == "AudienceJoin" and isnotempty(visitorId))
+              + countif(name == "AudienceJoin" and isempty(visitorId)),
     Connections = countif(name == "AudienceJoin"),
     PeakConcurrent = maxif(audienceSize, name == "AudienceJoin"),
     TotalMinutes = round(sumif(secondsConnected, name == "AudienceLeave") / 60, 1),
