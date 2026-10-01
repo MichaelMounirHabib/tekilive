@@ -141,6 +141,19 @@ async function checkBogusLang() {
   record('F6 unknown language is refused', !r.opened, r.opened ? 'opened' : `refused ${r.status}`);
 }
 
+// Only meaningful when the server has ALLOWED_ORIGINS set (the "after"
+// profile sets it to the test's own base URL).
+async function checkForeignOrigin() {
+  const r = await new Promise((resolve) => {
+    const ws = new WebSocket(`${wsBase}/?role=audience&session=${session}&lang=fr`, { headers: { Origin: 'https://evil.example' } });
+    const t = setTimeout(() => { ws.terminate(); resolve({ opened: false, status: 'timeout' }); }, 3000);
+    ws.on('open', () => { clearTimeout(t); ws.close(); resolve({ opened: true }); });
+    ws.on('unexpected-response', (req, res) => { clearTimeout(t); resolve({ opened: false, status: res.statusCode }); });
+    ws.on('error', () => {});
+  });
+  record('Socket from another website is refused (403)', !r.opened && r.status === 403, r.opened ? 'opened' : `refused ${r.status}`);
+}
+
 async function checkMalformedSessionCode() {
   const bad = ['BAD!CODE', 'A'.repeat(13), 'NEW%0ALINE'];
   const outcomes = [];
@@ -350,6 +363,7 @@ async function main() {
   await checkSpeakerNoLogin();
   await checkBogusLang();
   await checkMalformedSessionCode();
+  await checkForeignOrigin();
   await checkAttendeeCannotOpenSession();
   if (signedIn) {
     await checkSessionCapAndEnd();

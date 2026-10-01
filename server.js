@@ -11,10 +11,15 @@ const translator = require('./translate');
 const auth = require('./auth');
 
 const PORT = process.env.PORT || 3000;
+// Compared without case or a trailing "/", the usual typos when the value is
+// pasted from a browser address bar.
+const normalizeOrigin = (o) => String(o || '').trim().replace(/\/+$/, '').toLowerCase();
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
-  .map(o => o.trim())
+  .map(normalizeOrigin)
   .filter(Boolean);
+// A refused origin used to fail silently; each one is now logged once.
+const refusedOrigins = new Set();
 
 // Any session code is accepted, but only a signed-in presenter can open one
 // (by connecting the console or saving branding), and at most MAX_SESSIONS
@@ -322,7 +327,14 @@ const wss = new WebSocketServer({
   // one client make the server buffer and parse a huge message.
   maxPayload: 16 * 1024,
   verifyClient(info, cb) {
-    if (ALLOWED_ORIGINS.length > 0 && !ALLOWED_ORIGINS.includes(info.origin)) return cb(false);
+    if (ALLOWED_ORIGINS.length > 0 && !ALLOWED_ORIGINS.includes(normalizeOrigin(info.origin))) {
+      const origin = String(info.origin || '(none)').slice(0, 100);
+      if (!refusedOrigins.has(origin) && refusedOrigins.size < 50) {
+        refusedOrigins.add(origin);
+        log(`WebSocket refused: origin ${JSON.stringify(origin)} is not in ALLOWED_ORIGINS (${ALLOWED_ORIGINS.join(', ')})`);
+      }
+      return cb(false, 403, 'Origin not allowed');
+    }
 
     const url = requestUrl(info.req);
     if (!url) return cb(false, 400, 'Bad request');
@@ -636,6 +648,9 @@ process.on('uncaughtException', (err) => {
 
 server.listen(PORT, () => {
   console.log(`TekiLive server listening on port ${PORT}`);
+  log(ALLOWED_ORIGINS.length
+    ? `WebSocket origins allowed: ${ALLOWED_ORIGINS.join(', ')} (other sites, including another port or localhost, are refused)`
+    : 'WebSocket origins: any (set ALLOWED_ORIGINS in production)');
   if (!auth.isEnabled()) {
     log(`Sign-in is disabled: missing ${auth.missingSettings().join(', ')}. The presenter console and admin pages stay locked until these are set and the server is restarted.`);
   }

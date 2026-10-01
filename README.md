@@ -81,8 +81,10 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 - Sessions are isolated by a short code (`?session=MAIN`), so one deployment
   supports multiple concurrent panels/tracks at once. Any code works (letters,
   digits and `-`, up to 12 characters), but only the signed-in admin opens a
-  session, by connecting the control console or saving branding with that
-  code, and at most `MAX_SESSIONS` (default 5, changeable live from the admin
+  session: on the control console with **Open session** (no mic needed) or
+  **Start listening** (opens it and starts the mic), or by saving branding
+  with that code. Loading the control console alone doesn't open anything.
+  Once it is open, **Copy presenter link** is enabled there. At most `MAX_SESSIONS` (default 5, changeable live from the admin
   overview) are open at once. Attendees can only join
   an open session: if they scan before the presenter has opened it, the join
   page shows "Not started yet" and opens by itself when it starts. The admin
@@ -119,7 +121,7 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `PORT` | no | `3000` | Port the server listens on (hosting platforms set this for you) |
-| `ALLOWED_ORIGINS` | recommended in production | *(empty = allow all)* | Comma-separated list of origins allowed to open a WebSocket connection, e.g. `https://<app>.azurewebsites.net`. Set it on the live deployment so another website can't open a presenter connection using a signed-in admin's cookie |
+| `ALLOWED_ORIGINS` | recommended in production | *(empty = allow all)* | Comma-separated list of origins allowed to open a WebSocket connection, e.g. `https://<app>.azurewebsites.net`. Set it on the live deployment so another website can't open a presenter connection using a signed-in admin's cookie. Case and a trailing `/` don't matter. When it is set, every other origin is refused, **including `http://localhost:3000` on a local run**: add it to the list or leave the setting out of your local `.env`. The server prints the allowed list at startup and logs each refused origin |
 | `DEEPL_API_KEY` | recommended | *(empty)* | DeepL API key. When set, this becomes the translation provider (see below) |
 | `AZURE_TRANSLATOR_KEY` | alternative | *(empty)* | Azure Translator API key, used only if no DeepL key is set |
 | `AZURE_TRANSLATOR_REGION` | with the key above | *(empty)* | Azure resource region, e.g. `eastus` |
@@ -215,8 +217,8 @@ Set it once, shortly before the event starts.
 One admin account, defined by env settings: `ADMIN_EMAIL`, `ADMIN_PASSWORD`
 and `SESSION_SECRET`. No database. Signing in is required to:
 
-- run the control console (`/control.html`) for any session code, which opens
-  the session and shows its QR, branding and presenter link,
+- run the control console (`/control.html`) for any session code: open the
+  session, show its QR, set branding, copy the presenter link,
 - change a session's branding,
 - open the admin overview (`/admin.html`): every open session (presenter
   connected or not, live audience per language, branding) with **Copy

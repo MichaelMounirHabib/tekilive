@@ -138,7 +138,9 @@
         <option value="quality">Best quality — ~7s behind</option>
       </select>
     </div>
-    <div style="display:flex; gap:10px;">
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn-outline" id="openSessionBtn">Open session</button>
+      <button class="btn-outline" id="copyPresenterLinkBtn" disabled title="Open the session first">Copy presenter link</button>
       <button class="gradient-btn" id="toggleBtn">Start listening</button>
     </div>
   </div>
@@ -197,13 +199,6 @@
         <div>
           <div style="font-size:13px; margin-bottom:4px;">Audience scans to join</div>
           <div class="qr-url" id="qrUrl">Starting server…</div>
-        </div>
-      </div>
-      <div id="presenterLinkWrap" style="display:none; margin-top:14px;">
-        <div style="font-size:13px; margin-bottom:6px;">Presenter link: send it to the speaker. It opens the presenter page for this session only, with no sign-in. Keep it private.</div>
-        <div style="display:flex; gap:8px;">
-          <input id="presenterLinkInput" readonly>
-          <button class="btn-outline" id="copyPresenterLinkBtn">Copy</button>
         </div>
       </div>
     </div>
@@ -464,18 +459,33 @@ let connectedCode = null;
 
 // Admin consoles get the session's presenter key when they connect; build the
 // link the speaker opens. Presenter consoles never receive it.
-const presenterLinkWrap = document.getElementById('presenterLinkWrap');
-const presenterLinkInput = document.getElementById('presenterLinkInput');
+const openSessionBtn = document.getElementById('openSessionBtn');
+const copyPresenterLinkBtn = document.getElementById('copyPresenterLinkBtn');
+let presenterLink = '';
+if (PRESENTER_MODE) { openSessionBtn.style.display = 'none'; copyPresenterLinkBtn.style.display = 'none'; }
+
 function showPresenterLink(code, key){
-  if (PRESENTER_MODE || !key) { presenterLinkWrap.style.display = 'none'; return; }
-  presenterLinkInput.value = `${location.origin}/present.html?session=${encodeURIComponent(code)}#key=${encodeURIComponent(key)}`;
-  presenterLinkWrap.style.display = 'block';
+  presenterLink = !PRESENTER_MODE && key
+    ? `${location.origin}/present.html?session=${encodeURIComponent(code)}#key=${encodeURIComponent(key)}`
+    : '';
+  copyPresenterLinkBtn.disabled = !presenterLink;
 }
-document.getElementById('copyPresenterLinkBtn').addEventListener('click', async (e) => {
-  try { await navigator.clipboard.writeText(presenterLinkInput.value); e.target.textContent = 'Copied'; }
-  catch (err) { presenterLinkInput.select(); e.target.textContent = 'Press Ctrl+C'; }
-  setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+copyPresenterLinkBtn.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(presenterLink); copyPresenterLinkBtn.textContent = 'Copied'; }
+  catch (err) { prompt('Copy the presenter link and send it to the speaker:', presenterLink); }
+  setTimeout(() => { copyPresenterLinkBtn.textContent = 'Copy presenter link'; }, 2000);
 });
+
+// The admin console opens its session on purpose (Open session, or Start
+// listening), not just by loading the page, so a session only takes a slot
+// when it is meant to.
+function setSessionUi(state){
+  if (PRESENTER_MODE) return;
+  openSessionBtn.disabled = state !== 'closed';
+  openSessionBtn.textContent = state === 'open' ? 'Session open' : state === 'opening' ? 'Opening…' : 'Open session';
+  if (state !== 'open') showPresenterLink('', '');
+}
+openSessionBtn.addEventListener('click', () => { if (!ws) connectWs(); });
 
 function connectWs(){
   const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
@@ -484,6 +494,7 @@ function connectWs(){
   const url = `${proto}://${location.host}?role=speaker&session=${code}`;
   const socket = PRESENTER_MODE ? new WebSocket(url, ['tekilive-presenter', presenterKey]) : new WebSocket(url);
   ws = socket;
+  setSessionUi('opening');
   lastServerMessageAt = Date.now();
   socket.onopen = () => { socket.opened = true; statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); dbg('ws-open', code); flushOutbox(); };
   socket.onclose = () => {
@@ -492,14 +503,29 @@ function connectWs(){
     // socket to reconnect elsewhere must not race with the *new* socket's
     // own state (a shared flag reset by connectWs() before this fires would
     // let this stale handler schedule a duplicate reconnect anyway).
-    if (socket.manualClose) return;
+    if (socket.manualClose) {
+      // Only the current socket resets the buttons; an old one closed while
+      // switching codes must not undo the new session's state.
+      if (ws === socket) { ws = null; setSessionUi('closed'); }
+      return;
+    }
     statusText.textContent = 'Disconnected — retrying…';
+    setSessionUi('opening');
     if (PRESENTER_MODE) {
       // A presenter link only works once the admin has opened the session
       // (and again after a server restart, once the admin console is back).
       if (socket.opened) return setTimeout(connectWs, 1500);
-      statusText.textContent = `Waiting for session ${code} to be opened by the admin. If this keeps showing, ask for a new presenter link.`;
-      return setTimeout(connectWs, 5000);
+      // The browser can't see why a socket was refused, so ask whether the
+      // session is open: if it is, waiting won't help and the message says so.
+      fetch(`/api/session/${encodeURIComponent(code)}/branding`)
+        .then(res => {
+          statusText.textContent = res.status === 404
+            ? `Waiting for session ${code} to be opened by the admin…`
+            : `Session ${code} is open, but the server refused this presenter page. The link may be wrong or out of date, or this address (${location.origin}) is not in the server's ALLOWED_ORIGINS. Ask the admin.`;
+        })
+        .catch(() => {})
+        .finally(() => setTimeout(connectWs, 5000));
+      return;
     }
     // The server refuses the caption socket once the sign-in has expired (or
     // was ended in another tab); retrying would loop forever, so ask to sign
@@ -516,7 +542,10 @@ function connectWs(){
             statusText.textContent = `Can't open session ${code}: all ${limit} sessions are in use. End one in the admin dashboard; this console keeps trying.`;
             return setTimeout(connectWs, 5000);
           }
-          setTimeout(connectWs, 1500);
+          // Signed in and a slot is free, yet refused: the remaining cause is
+          // the origin check, which would otherwise look like endless retrying.
+          statusText.textContent = `The server refused this console's connection. If ALLOWED_ORIGINS is set on the server, it must include ${location.origin}. Retrying…`;
+          setTimeout(connectWs, 5000);
         }) : setTimeout(connectWs, 1500));
       })
       .catch(() => setTimeout(connectWs, 1500));
@@ -526,13 +555,15 @@ function connectWs(){
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
     if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
-    if (msg.type === 'joined') showPresenterLink(code, msg.presenterKey);
+    if (msg.type === 'joined') { setSessionUi('open'); showPresenterLink(code, msg.presenterKey); }
     if (msg.type === 'branding') renderBranding(msg.branding);
     if (msg.type === 'session_ended') {
       // Ended from the admin dashboard. Don't reopen it by reconnecting;
       // changing the session code (or reloading) starts again on purpose.
       socket.manualClose = true;
-      statusText.textContent = `Session ${code} was ended from the admin dashboard. Change the code or reload to start again.`;
+      statusText.textContent = PRESENTER_MODE
+        ? `Session ${code} was ended by the admin.`
+        : `Session ${code} was ended from the admin dashboard. Press Open session to start it again.`;
     }
     if (msg.type === 'error') dbg('server-error', `${msg.lang}: ${msg.detail || msg.message}`);
     if (msg.type === 'delivered') dbg('delivered', `${msg.lang} ${msg.latency}ms`);
@@ -558,8 +589,11 @@ function connectWs(){
 // connect time, so transcripts went to a session nobody was listening in.
 sessionInput.addEventListener('change', () => {
   const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
-  if (code === connectedCode) return;
-  if (ws) { ws.manualClose = true; ws.close(); }
+  // Not open yet: only the QR follows the new code (setupQr). Already open:
+  // move this console to the new code, which opens that session.
+  if (!ws || code === connectedCode) return;
+  ws.manualClose = true;
+  ws.close();
   connectWs();
 });
 
@@ -844,6 +878,9 @@ function handleResult(event){
 
 toggleBtn.addEventListener('click', () => {
   if (!listening){
+    // Starting to speak opens the session too, if it isn't open yet; the
+    // first chunks wait in the outbox until the socket is up.
+    if (!PRESENTER_MODE && !ws) connectWs();
     showMicWarning('');
     engineLang = srcSelect.value; misses = [];
     chunker = makeChunker();
@@ -880,6 +917,9 @@ function showConsole(user){
   if (!PRESENTER_MODE) {
     logoutBtn.style.display = 'inline-block';
     adminLink.style.display = 'inline-block';
+    // The admin opens the session with Open session or Start listening.
+    if (!ws) { setSessionUi('closed'); statusText.textContent = 'Session not open yet'; }
+    return;
   }
   connectWs();
 }

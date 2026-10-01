@@ -396,3 +396,32 @@ Replaces the `SESSION_CODES` allowlist (D3), at the owner's request.
 - [x] README.
 
 - [x] Verified: attack.js 24/24 twice (0 uncaught); browser: admin console shows the presenter link, presenter page connects with the key and no sign-in, admin page shows the limit control and copy/end buttons.
+
+---
+
+# Control console buttons + silent origin refusal (done)
+
+- [x] Bug: presenter page said "waiting for the admin" for an open session. Cause: the
+      server's ALLOWED_ORIGINS (set in the owner's .env) excluded http://localhost:3000,
+      so every WebSocket (control, presenter, attendees) was refused with a bare 401
+      and nothing in the log. Proven by an attendee socket to the open MAIN-1 getting
+      401, which only the origin check returns.
+- [x] Fix:
+      - origins compared ignoring case and a trailing "/"
+      - origin refusal answers 403
+      - each refused origin is logged once
+      - the allowed list is printed at startup
+      - presenter page and control console say what was refused instead of "waiting"
+- [x] Control console: "Open session" (no mic) and "Copy presenter link" (enabled once
+      open); "Start listening" still opens the session too. Loading the page no longer
+      opens a session. Presenter page unchanged (auto-connects, no such buttons).
+- [x] Verified:
+      - attack.js 25/25 (new: foreign origin refused 403), with a messy
+        ALLOWED_ORIGINS value
+      - browser:
+        - load: nothing opened
+        - Open session: opened, link enabled
+        - End session: buttons reset
+        - Start listening reopened the session
+        - presenter page on a refused origin names the cause
+        - presenter page on an allowed origin connects
