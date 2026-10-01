@@ -103,9 +103,11 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | `AZURE_TRANSLATOR_KEY` | alternative | *(empty)* | Azure Translator API key, used only if no DeepL key is set |
 | `AZURE_TRANSLATOR_REGION` | with the key above | *(empty)* | Azure resource region, e.g. `eastus` |
 | `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the free MyMemory API (only used as a last-resort fallback when no other provider is set) for a higher rate limit |
-| `DATABASE_URL` | for accounts | *(empty)* | Postgres connection string. Only needed for presenter-console login and the admin overview — see Accounts below |
-| `SESSION_SECRET` | for accounts | *(empty)* | Random string used to sign login sessions. Required alongside `DATABASE_URL` for accounts to activate |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first deploy only | *(empty)* | Bootstraps one admin account on startup if no admin exists yet. Safe to leave set — bootstrap is a no-op once that admin already exists |
+| `NODE_ENV` | in production | *(empty)* | Set to `production` on the live deployment. The server then refuses to start unless `SESSION_SECRET`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set (see Accounts), and the login cookie is sent over HTTPS only |
+| `SESSION_SECRET` | in production | *(empty)* | Random string (at least 32 characters) used to sign the admin login cookie |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | in production | *(empty)* | The one admin account (password at least 12 characters). Used to sign in to the presenter console and the admin overview |
+| `SESSION_CODES` | recommended | *(empty = any code)* | Comma-separated session codes the event uses, e.g. `MAIN,MAIN-2`. Any other code is refused. The first one is the default when a link has no code |
+| `DEEPL_API_URL` | no | *(empty)* | Overrides the DeepL endpoint. Only for the load test's mock translator (`loadtest/`); leave unset |
 | `LOG_FILE` | no | *(empty)* | Also write the server log to this file (relative to the app folder), e.g. `tekilive-debug.log`. Handy for looking at a problem afterwards; kept under 5MB |
 | `CLIENT_LOG` | no | *(empty)* | Set to `1` to let the presenter console report what its speech engine and caption pipeline are doing into the same log (includes transcript snippets). Leave off in production |
 
@@ -114,7 +116,7 @@ hosting platforms let you set them directly in their dashboard instead.
 
 ### Translation provider
 
-`translate.js` picks DeepL when `DEEPL_API_KEY` is set, Azure Translator
+By default `translate.js` picks DeepL when `DEEPL_API_KEY` is set, Azure Translator
 when `AZURE_TRANSLATOR_KEY` is set instead, and falls back to the free
 MyMemory API otherwise. **The MyMemory fallback is for local development
 only** — its anonymous quota is small (and shared across whatever IP a
@@ -137,9 +139,21 @@ app's language list — selecting it as a target will error. Everything else
 (English, Arabic, French, Spanish, German, Chinese, Portuguese, Russian,
 Turkish) is supported.
 
-Swapping to a different provider (Google Cloud Translation, etc.) later is
-a one-file change — add another `translate<Provider>()` function in
-`translate.js` and branch to it in `translate()`.
+**Switching provider live.** The admin overview (`/admin.html`) has a
+**Translation provider** card: pick DeepL, Azure Translator or MyMemory, enter
+its key (and region for Azure), and press **Test & switch**. The server runs a
+test translation first and only switches if it succeeds, so a mistyped key
+leaves captions running on the current provider. The switch applies from the
+next caption, for both sessions, with no restart. **Reset to defaults** goes
+back to the env-configured provider above. The dashboard choice is held in
+memory, so a server restart also goes back to the env provider: keep the main
+event key in the env settings and use the dashboard for switching on the day
+(for example when the presenter console reports "translation quota used up").
+The full key is never sent back to the browser, only its last 4 characters.
+
+Adding a different provider (Google Cloud Translation, etc.) later is a
+one-file change: add another `translate<Provider>()` function in
+`translate.js` and register it in `PROVIDERS`.
 
 ## Branding
 
@@ -153,7 +167,7 @@ picker, and the audience caption screen:
   it's added).
 - **Event + organizer branding** — set per session, not global. On the
   presenter console, fill in the event name / organizer name and upload
-  their logos (2MB max each, any common image format) under "Event
+  their logos (500 KB max each, PNG, JPEG or WebP) under "Event
   branding," then **Save branding**. It's fanned out live over the existing
   WebSocket to every attendee already connected (no reload needed), and
   future joiners pick it up from `GET /api/session/:code/branding` before
@@ -168,36 +182,32 @@ Set it once, shortly before the event starts.
 
 ## Accounts
 
-Two roles, both optional — leave `DATABASE_URL`/`SESSION_SECRET` unset and
-the presenter console stays exactly as open as before (no login, anyone
-with the URL can run any session), which is still fine for a single-track
-demo. Set them both to turn on:
+One admin account, defined by env settings: `ADMIN_EMAIL`, `ADMIN_PASSWORD`
+and `SESSION_SECRET`. No database. With all three set, signing in is required to:
 
-- **Stage managers** — one account per stage/track, each pre-assigned to
-  a specific session code by an admin. Logging in at `/control.html` takes
-  them straight to their stage's console (session code locked, can't be
-  changed or mixed up with another track) and lets them pick the spoken
-  language, start/stop listening, and set that stage's branding, same as
-  the console always worked.
-- **Admins** — sign in at `/admin.html` to see every currently active
-  session at a glance (presenter connected or not, live audience count per
-  language, event branding) and to create/remove stage manager accounts.
-  The very first admin is bootstrapped automatically from `ADMIN_EMAIL` /
-  `ADMIN_PASSWORD` on server startup; every admin after that is created
-  from the admin overview page itself.
+- run the presenter console (`/control.html`) for any session code,
+- change a session's branding,
+- open the admin overview (`/admin.html`): every active session (presenter
+  connected or not, live audience per language, branding) and the
+  translation provider card.
+
+With two sessions running at once, both presenter laptops sign in with the
+same admin account. After 10 failed sign-ins from one address, further
+attempts from it are refused for 15 minutes. At a venue, attendees usually
+share one public address with the presenter laptops, so someone there could
+trigger that lock. Sign in before doors open (a sign-in lasts 12 hours), and if
+the lock does hit, sign in over mobile data instead of the venue Wi-Fi.
 
 Enforcement isn't just a login screen on top of an open backend: the
 WebSocket connection a presenter console uses to actually stream captions
-checks the session cookie server-side too, so a stage manager genuinely
-cannot connect to (or interfere with) a different stage's session, even by
-hand-crafting a request. Audience join links are deliberately **not**
-gated — attendees scanning a QR code should never need an account.
+checks the session cookie server-side too. Audience join links are
+deliberately **not** gated — attendees scanning a QR code should never need
+an account.
 
-Accounts are the one thing in this app backed by a real database instead
-of memory, since — unlike a session's captions or branding — losing every
-account on a server restart mid-event would be a real problem. A session's
-own state (captions, connected audience, branding) still lives in memory
-exactly as before; only the `users` table is durable.
+Leave the three settings unset for local development and the console stays
+open with no login, as before. In production (`NODE_ENV=production`) the
+server refuses to start without them, so a missing setting can't leave the
+presenter socket open to anyone.
 
 ## Run it locally
 
@@ -247,13 +257,8 @@ way.
 4. Leave `ALLOWED_ORIGINS` blank unless you want to lock the WebSocket down
    to a specific domain later. Set `DEEPL_API_KEY` (see Translation provider
    above) so captions don't rely on the unreliable MyMemory fallback.
-   If you want stage-manager/admin logins (see Accounts above), also
-   create a Postgres instance ([dashboard.render.com](https://dashboard.render.com)
-   → **New** → **Postgres** — the free tier works but auto-expires after
-   30 days, fine for testing, upgrade to a paid instance before a real
-   event), then set `DATABASE_URL` to its connection string, `SESSION_SECRET`
-   to any random string, and `ADMIN_EMAIL`/`ADMIN_PASSWORD` to your first
-   admin login. Skip all four to keep the console open with no login.
+   For a live event also set `NODE_ENV=production`, `SESSION_SECRET`,
+   `ADMIN_EMAIL`, `ADMIN_PASSWORD` and `SESSION_CODES` (see Accounts above).
 5. Deploy. Render builds and gives you a public URL like
    `https://<service-name>.onrender.com` — HTTPS and WSS both work on it
    automatically, no extra config. Note the `.onrender.com` subdomain is
@@ -285,6 +290,6 @@ beforehand so it never sleeps.
   beforehand; adding a real datastore would unlock branding (and a
   post-event transcript/summary deliverable) surviving restarts.
 - **No auth on audience links:** by design — anyone with the QR/URL can
-  join a session as an attendee. The presenter console *can* be gated
-  behind stage-manager/admin accounts (see Accounts above) if you want
-  that; audience join links stay open either way.
+  join a session as an attendee. The presenter console is gated
+  behind the admin account once it is configured (see Accounts above);
+  audience join links stay open either way.

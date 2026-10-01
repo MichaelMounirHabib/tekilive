@@ -7,8 +7,7 @@ const fs = require('fs');
 const util = require('util');
 const multer = require('multer');
 const { WebSocketServer } = require('ws');
-const { translate } = require('./translate');
-const db = require('./db');
+const translator = require('./translate');
 const auth = require('./auth');
 
 const PORT = process.env.PORT || 3000;
@@ -17,7 +16,52 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .map(o => o.trim())
   .filter(Boolean);
 
+// The event's session codes (e.g. "MAIN,MAIN-2"). Anything else is refused,
+// which also stops strangers creating sessions that sit in memory. Empty
+// means any code is accepted, as before (local dev).
+const SESSION_CODES = (process.env.SESSION_CODES || '')
+  .split(',')
+  .map(c => c.trim().toUpperCase())
+  .filter(Boolean);
+const DEFAULT_SESSION = SESSION_CODES[0] || 'DEMO';
+
+// Only the path and query of a request are used. A constant base means a
+// malformed Host header can't make this throw (it used to, inside the
+// upgrade handler, which took the whole server down); a path the parser
+// still rejects comes back as null and the request is refused.
+function requestUrl(req) {
+  try { return new URL(req.url, 'http://localhost'); } catch { return null; }
+}
+
+function sessionCodeFrom(raw) {
+  const code = String(raw || DEFAULT_SESSION).trim().toUpperCase();
+  return SESSION_CODES.length === 0 || SESSION_CODES.includes(code) ? code : null;
+}
+
+// Mirrors LANGUAGES in public/join.html and public/control.html; keep them in
+// step. Anything else would be one more paid translation per caption.
+const LANGUAGE_CODES = new Set(['en', 'ar', 'fr', 'es', 'de', 'zh', 'pt', 'ru', 'hi', 'tr']);
+
+if (process.env.NODE_ENV === 'production') {
+  const problems = auth.configProblems();
+  if (!SESSION_CODES.length) problems.push('SESSION_CODES is required (e.g. MAIN,MAIN-2)');
+  if (problems.length) {
+    // Starting anyway would leave the presenter socket open to anyone.
+    console.error(`Refusing to start in production:\n - ${problems.join('\n - ')}`);
+    process.exit(1);
+  }
+}
+
 const app = express();
+// App Service (and most hosts) sit one proxy in front of the app; this makes
+// req.ip the caller's address for the login limiter below.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  next();
+});
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.status(200).send('ok'));
@@ -36,17 +80,44 @@ app.post('/api/client-log', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/auth/login', async (req, res) => {
-  if (!db.isEnabled() || !auth.isEnabled()) return res.status(503).json({ error: 'Accounts are not configured on this deployment' });
-  const email = (req.body.email || '').trim();
-  const password = req.body.password || '';
+// ponytail: in-memory per-IP counter, fine for one process and one event.
+// Only failures count, and only logins: attendees never log in, so a venue
+// full of phones behind one IP is never affected.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 10;
+const loginFailures = new Map(); // ip -> { count, resetAt }
+
+function loginBlocked(ip) {
+  const entry = loginFailures.get(ip);
+  if (!entry) return false;
+  if (Date.now() > entry.resetAt) { loginFailures.delete(ip); return false; }
+  return entry.count >= LOGIN_MAX_FAILURES;
+}
+
+function noteLoginFailure(ip) {
+  const now = Date.now();
+  const entry = loginFailures.get(ip);
+  if (!entry || now > entry.resetAt) loginFailures.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  else entry.count++;
+  if (loginFailures.size > 10000) {
+    loginFailures.forEach((e, key) => { if (now > e.resetAt) loginFailures.delete(key); });
+  }
+}
+
+app.post('/api/auth/login', (req, res) => {
+  if (!auth.isEnabled()) return res.status(503).json({ error: 'Accounts are not configured on this deployment' });
+  if (loginBlocked(req.ip)) return res.status(429).json({ error: 'Too many failed sign-ins. Try again in 15 minutes.' });
+  const body = req.body || {}; // Express 5 leaves it undefined for a non-JSON request
+  const email = typeof body.email === 'string' ? body.email : '';
+  const password = typeof body.password === 'string' ? body.password : '';
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-  const user = await db.findUserByEmail(email);
-  if (!user || !(await db.verifyPassword(user, password))) {
+  if (!auth.checkAdminCredentials(email, password)) {
+    noteLoginFailure(req.ip);
     return res.status(401).json({ error: 'Invalid email or password' });
   }
-  res.set('Set-Cookie', auth.cookieHeader(auth.signToken(user)));
-  res.json(db.toPublicUser(user));
+  loginFailures.delete(req.ip);
+  res.set('Set-Cookie', auth.cookieHeader(auth.signToken()));
+  res.json({ email: email.trim().toLowerCase(), role: 'admin' });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -55,10 +126,10 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => {
-  const authConfigured = db.isEnabled() && auth.isEnabled();
+  const authConfigured = auth.isEnabled();
   const user = auth.readUserFromRequest(req);
   if (!user) return res.status(401).json({ error: 'Not signed in', authConfigured });
-  res.json({ id: user.id, email: user.email, role: user.role, sessionCode: user.sessionCode, stageName: user.stageName, authConfigured });
+  res.json({ email: user.email, role: user.role, authConfigured });
 });
 
 app.get('/api/admin/sessions', auth.requireAdmin, (req, res) => {
@@ -73,81 +144,91 @@ app.get('/api/admin/sessions', auth.requireAdmin, (req, res) => {
   res.json(list);
 });
 
-app.get('/api/admin/users', auth.requireAdmin, async (req, res) => {
-  res.json(await db.listUsers());
+// Translation provider, switchable live from the admin dashboard. The raw
+// key is never sent back; status() masks it to its last 4 characters.
+app.get('/api/admin/translator', auth.requireAdmin, (req, res) => {
+  res.json(translator.status());
 });
 
-app.post('/api/admin/users', auth.requireAdmin, async (req, res) => {
-  const { email, password, sessionCode, stageName } = req.body;
-  const role = req.body.role === 'admin' ? 'admin' : 'stage_manager';
-  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-  if (role === 'stage_manager' && !sessionCode) return res.status(400).json({ error: 'Session code is required for a stage manager account' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  const existing = await db.findUserByEmail(email);
-  if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
+app.post('/api/admin/translator', auth.requireAdmin, async (req, res) => {
   try {
-    const user = await db.createUser({
-      email, password, role,
-      sessionCode: role === 'stage_manager' ? sessionCode : null,
-      stageName: role === 'stage_manager' ? (stageName || null) : null,
-    });
-    res.status(201).json(db.toPublicUser(user));
+    const status = await translator.setOverride(req.body || {});
+    log(`translation provider switched to ${status.providerName} (key ${status.key || 'none'}) by ${req.authUser.email}`);
+    res.json(status);
   } catch (err) {
-    log('Failed to create account:', err.message);
-    res.status(500).json({ error: 'Failed to create account' });
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Failed to switch provider' });
   }
 });
 
-app.delete('/api/admin/users/:id', auth.requireAdmin, async (req, res) => {
-  const target = await db.findUserById(req.params.id);
-  if (target && target.role === 'admin' && (await db.countAdmins()) <= 1) {
-    return res.status(400).json({ error: 'Cannot remove the last remaining admin account' });
-  }
-  await db.deleteUser(req.params.id);
-  res.json({ ok: true });
+app.delete('/api/admin/translator', auth.requireAdmin, (req, res) => {
+  const status = translator.clearOverride();
+  log(`translation provider reset to env default ${status.providerName} by ${req.authUser.email}`);
+  res.json(status);
 });
 
 // Event/organizer logos, uploaded per session. Stored in memory on the
 // session object (like everything else here) rather than a cloud storage
 // service — no new account/infra needed, and it matches the app's existing
 // no-persistence lifecycle: branding lives as long as the session does.
-const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+// Raster formats only: an SVG can carry script that would run on this
+// origin if someone opened the logo URL directly.
+const LOGO_MAX_BYTES = 500 * 1024;
+const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: LOGO_MAX_BYTES },
+  limits: { fileSize: LOGO_MAX_BYTES, files: 2, fields: 4, fieldSize: 1024 },
   fileFilter(req, file, cb) {
-    cb(null, file.mimetype.startsWith('image/'));
+    if (LOGO_TYPES.includes(file.mimetype)) return cb(null, true);
+    cb(new Error('Logo must be a PNG, JPEG or WebP image'));
   },
 }).fields([{ name: 'eventLogo', maxCount: 1 }, { name: 'orgLogo', maxCount: 1 }]);
 
+const NO_BRANDING = { eventName: '', orgName: '', hasEventLogo: false, hasOrgLogo: false, logoVersion: 0 };
+
 function brandingMeta(session) {
+  if (!session) return NO_BRANDING;
   return {
     eventName: session.branding.eventName,
     orgName: session.branding.orgName,
     hasEventLogo: !!session.branding.eventLogo,
     hasOrgLogo: !!session.branding.orgLogo,
+    // Bumped on every logo upload; clients put it in the logo URL, so the
+    // logo can be cached hard and a new upload still shows up at once.
+    logoVersion: session.branding.logoVersion,
   };
 }
 
+// Admin-only once accounts are configured; open on local dev without them.
+function requireAdminIfEnabled(req, res, next) {
+  if (!auth.isEnabled()) return next();
+  auth.requireAdmin(req, res, next);
+}
+
 app.get('/api/session/:code/branding', (req, res) => {
-  const session = getSession(req.params.code.toUpperCase());
-  res.json(brandingMeta(session));
+  const code = sessionCodeFrom(req.params.code);
+  if (!code) return res.status(404).json({ error: 'Session not found' });
+  res.json(brandingMeta(sessions.get(code)));
 });
 
-app.post('/api/session/:code/branding', (req, res) => {
-  const code = req.params.code.toUpperCase();
+app.post('/api/session/:code/branding', requireAdminIfEnabled, (req, res) => {
+  const code = sessionCodeFrom(req.params.code);
+  if (!code) return res.status(404).json({ error: 'Session not found' });
   upload(req, res, (err) => {
     if (err) {
       log(`[${code}] branding upload rejected:`, err.message);
       return res.status(400).json({ error: err.message });
     }
     const session = getSession(code);
-    if (typeof req.body.eventName === 'string') session.branding.eventName = req.body.eventName.slice(0, 120);
-    if (typeof req.body.orgName === 'string') session.branding.orgName = req.body.orgName.slice(0, 120);
+    const body = req.body || {}; // undefined in Express 5 when the request isn't multipart
+    if (typeof body.eventName === 'string') session.branding.eventName = body.eventName.slice(0, 120);
+    if (typeof body.orgName === 'string') session.branding.orgName = body.orgName.slice(0, 120);
     const eventFile = req.files?.eventLogo?.[0];
     const orgFile = req.files?.orgLogo?.[0];
     if (eventFile) session.branding.eventLogo = { mime: eventFile.mimetype, data: eventFile.buffer };
     if (orgFile) session.branding.orgLogo = { mime: orgFile.mimetype, data: orgFile.buffer };
+    // A timestamp rather than a counter: after a restart a counter would start
+    // again at 1, and phones that cached ?v=1 would keep showing the old logo.
+    if (eventFile || orgFile) session.branding.logoVersion = Date.now();
     const meta = brandingMeta(session);
     log(`[${code}] branding updated:`, meta);
     const payload = JSON.stringify({ type: 'branding', branding: meta });
@@ -158,44 +239,51 @@ app.post('/api/session/:code/branding', (req, res) => {
 });
 
 app.get('/api/session/:code/logo/:kind', (req, res) => {
-  const session = getSession(req.params.code.toUpperCase());
-  const logo = req.params.kind === 'org' ? session.branding.orgLogo : req.params.kind === 'event' ? session.branding.eventLogo : null;
+  const code = sessionCodeFrom(req.params.code);
+  const session = code && sessions.get(code);
+  const logo = !session ? null : req.params.kind === 'org' ? session.branding.orgLogo : req.params.kind === 'event' ? session.branding.eventLogo : null;
   if (!logo) return res.status(404).end();
   res.set('Content-Type', logo.mime);
-  res.set('Cache-Control', 'no-store');
+  res.set('Content-Security-Policy', "default-src 'none'");
+  // Safe to cache: the URL carries ?v=<logoVersion>, which changes on upload.
+  res.set('Cache-Control', 'public, max-age=86400');
   res.send(logo.data);
 });
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
+  // Captions are a few hundred bytes. The library default (100 MiB) would let
+  // one client make the server buffer and parse a huge message.
+  maxPayload: 16 * 1024,
   verifyClient(info, cb) {
     if (ALLOWED_ORIGINS.length > 0 && !ALLOWED_ORIGINS.includes(info.origin)) return cb(false);
 
-    const url = new URL(info.req.url, `http://${info.req.headers.host}`);
+    const url = requestUrl(info.req);
+    if (!url) return cb(false, 400, 'Bad request');
     const role = url.searchParams.get('role') || 'audience';
-    if (role !== 'speaker') return cb(true); // audience join links stay open, no login needed
+    if (!sessionCodeFrom(url.searchParams.get('session'))) return cb(false, 404, 'Session not found');
 
-    // If accounts aren't configured on this deployment (no SESSION_SECRET
-    // set), fall back to the original open-access behavior rather than
-    // locking everyone out.
+    if (role !== 'speaker') {
+      // Audience join links stay open, no login needed.
+      return LANGUAGE_CODES.has(url.searchParams.get('lang') || 'en') ? cb(true) : cb(false, 400, 'Unsupported language');
+    }
+
+    // If accounts aren't configured on this deployment (local dev), fall
+    // back to the original open-access behavior rather than locking
+    // everyone out. Production refuses to start in that state.
     if (!auth.isEnabled()) return cb(true);
-
-    const sessionCode = (url.searchParams.get('session') || 'DEMO').toUpperCase();
-    const user = auth.readUserFromRequest(info.req);
-    if (!user) return cb(false, 401, 'Sign in required');
-    if (user.role === 'admin') return cb(true);
-    if (user.role === 'stage_manager' && user.sessionCode === sessionCode) return cb(true);
-    return cb(false, 403, 'Not authorized for this session');
+    return auth.readUserFromRequest(info.req) ? cb(true) : cb(false, 401, 'Sign in required');
   },
 });
+wss.on('error', (err) => log('WebSocket server error:', err.message));
 
 /**
  * In-memory session store.
  * sessions: Map<sessionCode, {
  *   speakers: Set<ws>,
  *   audience: Map<ws, { lang }>,
- *   branding: { eventName, orgName, eventLogo: {mime,data}|null, orgLogo: {mime,data}|null },
+ *   branding: { eventName, orgName, eventLogo: {mime,data}|null, orgLogo: {mime,data}|null, logoVersion },
  *   deliveryTails: Map<lang, Promise>, // keeps each language's captions in spoken order
  *   recentSource: { lang, text },      // tail of what the speaker just said, as translation context
  * }>
@@ -207,7 +295,7 @@ function getSession(code) {
     sessions.set(code, {
       speakers: new Set(),
       audience: new Map(),
-      branding: { eventName: '', orgName: '', eventLogo: null, orgLogo: null },
+      branding: { eventName: '', orgName: '', eventLogo: null, orgLogo: null, logoVersion: 0 },
       deliveryTails: new Map(),
       recentSource: { lang: null, text: '' },
     });
@@ -332,10 +420,16 @@ wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', heartbeat);
 
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = requestUrl(req); // checked in verifyClient
   const role = url.searchParams.get('role') || 'audience';
-  const sessionCode = (url.searchParams.get('session') || 'DEMO').toUpperCase();
+  const sessionCode = sessionCodeFrom(url.searchParams.get('session')); // checked in verifyClient
   const session = getSession(sessionCode);
+
+  // A malformed frame (bad opcode, oversized message, invalid UTF-8) makes
+  // the socket emit 'error'. Without a listener Node treats that as an
+  // uncaught exception and the whole server exits, dropping every attendee.
+  // The library closes the offending socket itself; just record it.
+  ws.on('error', (err) => log(`[${sessionCode}] ${role} socket error (${err.code || 'unknown'}): ${err.message}`));
 
   if (role === 'speaker') {
     session.speakers.add(ws);
@@ -349,10 +443,12 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      if (!msg || typeof msg !== 'object') return; // "null" parses fine and would throw below
       if (msg.type !== 'final_transcript') return;
 
       const text = typeof msg.text === 'string' ? msg.text.trim() : '';
       const srcLang = msg.srcLang;
+      if (!LANGUAGE_CODES.has(srcLang)) return;
       const segmentEnd = msg.segmentEnd !== false; // older consoles never send it: one phrase per message
       const start = Date.now();
 
@@ -385,7 +481,7 @@ wss.on('connection', (ws, req) => {
         // language's chunks strictly in the order they were spoken — with
         // several chunks a second apart, a slow API call must not let a
         // later chunk overtake an earlier one on the audience's screen.
-        const pending = withTimeout(translate(text, srcLang, lang, context), TRANSLATION_TIMEOUT_MS);
+        const pending = withTimeout(translator.translate(text, srcLang, lang, context), TRANSLATION_TIMEOUT_MS);
         pending.catch(() => {}); // failure is reported at delivery time below
         enqueueDelivery(session, lang, async () => {
           try {
@@ -397,7 +493,8 @@ wss.on('connection', (ws, req) => {
             session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'delivered', lang, text: translated, latency })));
           } catch (err) {
             log(`[${sessionCode}] TRANSLATION FAILED ${srcLang}->${lang}:`, err && err.stack ? err.stack : err);
-            session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message: 'translation failed', detail: String(err && err.message || err).slice(0, 200) })));
+            const message = err && err.code === 'QUOTA_EXCEEDED' ? 'translation quota used up' : 'translation failed';
+            session.speakers.forEach(s => safeSend(s, JSON.stringify({ type: 'error', lang, message, detail: String(err && err.message || err).slice(0, 200) })));
           }
         });
       });
@@ -409,7 +506,7 @@ wss.on('connection', (ws, req) => {
       pruneSessionIfEmpty(sessionCode, session);
     });
   } else {
-    const lang = url.searchParams.get('lang') || 'en';
+    const lang = url.searchParams.get('lang') || 'en'; // checked in verifyClient
     session.audience.set(ws, { lang });
     log(`[${sessionCode}] audience joined (lang=${lang}, audience=${session.audience.size})`);
     safeSend(ws, JSON.stringify({ type: 'joined', role: 'audience', session: sessionCode, lang, branding: brandingMeta(session) }));
@@ -418,7 +515,10 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
-      if (msg.type === 'set_lang') {
+      if (!msg || typeof msg !== 'object') return; // "null" parses fine and would throw below
+      // Unchanged languages are ignored: each change recounts the audience
+      // and messages the presenter, so a client spamming it costs CPU.
+      if (msg.type === 'set_lang' && LANGUAGE_CODES.has(msg.lang) && session.audience.get(ws).lang !== msg.lang) {
         log(`[${sessionCode}] audience changed language to ${msg.lang}`);
         session.audience.set(ws, { lang: msg.lang });
         broadcastStats(session);
@@ -434,10 +534,15 @@ wss.on('connection', (ws, req) => {
   }
 });
 
-db.init()
-  .then(() => log('Database ready'))
-  .catch((err) => log('Database init failed (accounts/admin features will not work):', err.message));
+// ponytail: last-resort guard for a one-day event. Every known throw is fixed
+// at its source; this keeps a missed one from dropping every attendee and the
+// in-memory branding. It is logged loudly so it gets fixed, not ignored.
+process.on('uncaughtException', (err) => {
+  log('UNCAUGHT EXCEPTION (server kept running):', err && err.stack ? err.stack : err);
+});
 
 server.listen(PORT, () => {
   console.log(`TekiLive server listening on port ${PORT}`);
+  const providerWarning = translator.status().warning;
+  if (process.env.NODE_ENV === 'production' && providerWarning) log(`WARNING: ${providerWarning}`);
 });

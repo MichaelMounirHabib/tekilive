@@ -167,7 +167,7 @@ const LANGUAGES = [
 ];
 
 const params = new URLSearchParams(location.search);
-const sessionCode = (params.get('session') || 'DEMO').toUpperCase();
+const sessionCode = (params.get('session') || 'MAIN').toUpperCase();
 document.getElementById('sessionLine').textContent = `Session ${sessionCode}`;
 
 const grid = document.getElementById('langGrid');
@@ -189,9 +189,11 @@ function showDivider(el, on){
 }
 
 function renderBranding(b){
-  const bust = Date.now();
-  const eventLogoSrc = b.hasEventLogo ? `/api/session/${sessionCode}/logo/event?t=${bust}` : null;
-  const orgLogoSrc = b.hasOrgLogo ? `/api/session/${sessionCode}/logo/org?t=${bust}` : null;
+  // The version changes only when a logo is re-uploaded, so the phone's cache
+  // serves it on every reconnect instead of downloading it again.
+  const version = b.logoVersion || 0;
+  const eventLogoSrc = b.hasEventLogo ? `/api/session/${sessionCode}/logo/event?v=${version}` : null;
+  const orgLogoSrc = b.hasOrgLogo ? `/api/session/${sessionCode}/logo/org?v=${version}` : null;
 
   const eventBrand = document.getElementById('eventBrand');
   eventBrand.style.display = (b.eventName || b.orgName || eventLogoSrc || orgLogoSrc) ? 'flex' : 'none';
@@ -210,9 +212,20 @@ function renderBranding(b){
 }
 
 fetch(`/api/session/${sessionCode}/branding`)
-  .then(res => res.ok ? res.json() : null)
+  .then(res => {
+    if (res.status === 404) { showSessionNotFound(); return null; }
+    return res.ok ? res.json() : null;
+  })
   .then(b => { if (b) renderBranding(b); })
   .catch(() => {});
+
+// The server only accepts the event's own session codes, so a mistyped link
+// would otherwise sit on "reconnecting…" forever.
+function showSessionNotFound(){
+  document.querySelector('#picker h1').textContent = 'Session not found';
+  document.querySelector('#picker .lede').textContent = `There is no session "${sessionCode}". Check the code in your link, or scan the QR code again.`;
+  grid.style.display = 'none';
+}
 
 const MAX_CAPTION_LINES = 40;
 const capFeed = document.getElementById('capFeed');
@@ -381,7 +394,9 @@ function connect(langCode){
     dot.classList.remove('live');
     if (manualClose) return;
     statusText.textContent = 'Disconnected — reconnecting…';
-    setTimeout(() => connect(langCode), 1500);
+    // Spread out: after a venue Wi-Fi blip every phone drops at once, and a
+    // fixed delay would bring them all back in the same instant.
+    setTimeout(() => connect(langCode), 1500 + Math.random() * 3000);
   };
   ws.onmessage = (evt) => {
     lastServerMessageAt = Date.now();
