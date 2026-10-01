@@ -272,3 +272,77 @@ Other notes:
 - Front Door / WAF
 - Unit test suite (`attack.js` covers the security fixes)
 - DB TLS fix (the DB is removed)
+
+---
+
+# Whisper / server-side speech-to-text option (Large) — PLAN, waiting for approval
+
+Whisper is speech-to-text, not translation. It fits as an alternative to the browser's
+Web Speech engine (presenter side), not as a translation provider. Translation stays
+DeepL/Azure/MyMemory.
+
+## Research summary (sources in chat; model names and prices from vendor docs as read on 2026-10-01)
+- OpenAI file transcription (`/v1/audio/transcriptions`): `gpt-transcribe` (recommended,
+  $0.0045/min), `gpt-4o-transcribe` (~$0.006), `gpt-4o-mini-transcribe` (~$0.003),
+  `whisper-1` (legacy, $0.006). 25 MB per file. Arabic: confirmed for whisper-1 only.
+- OpenAI realtime transcription: `gpt-live-transcribe` ($0.017/min), PCM 24 kHz over
+  WebSocket, delta + completed events, no server VAD. Lowest latency. Arabic UNVERIFIED.
+- Azure OpenAI offers the same models (whisper, gpt-transcribe, gpt-live-transcribe) in the
+  same Azure subscription; realtime in East US 2 / Sweden Central.
+- Azure AI Speech: $1.00/h, continuous language ID (up to 10 languages, not within one sentence).
+- Self-hosting Whisper on B1 (1 vCPU, no GPU): not viable (~1.5 GB RAM, about real time per stream).
+- Cost for 2 sessions x 6 h: gpt-transcribe $3.24, whisper-1 $4.32, gpt-live-transcribe $12.24,
+  Azure Speech $12.00.
+
+## Decisions needed
+- [ ] W1 Engine:
+      - A (recommended): chunked transcription over HTTP with `gpt-transcribe`; `whisper-1` is selectable.
+      - B: realtime `gpt-live-transcribe` proxied over WebSocket.
+- [ ] W2 Account: OpenAI directly, or Azure OpenAI (same Azure subscription, data stays in Azure).
+- [ ] W3 Default engine on event day: browser (recommended until Arabic/English quality is
+      tested with your speakers) or Whisper.
+
+## Plan (option A, about 500-700 lines + tests)
+- [ ] `stt.js` (new, mirrors `translate.js`):
+      - provider config from env (`STT_API_KEY`, `STT_MODEL`, endpoint env-only)
+      - admin override with a test call, masked status
+      - OpenAI and Azure OpenAI endpoints (same request shape)
+- [ ] `server.js`:
+      - extract the caption path into `handleTranscript()` (unchanged behavior)
+      - add `POST /api/stt/:code`:
+        - admin-only, Origin check, WAV only (RIFF magic)
+        - limits: 10 s max per clip, 400 KB max, 1 request in flight per session, about 1/s
+        - daily audio-minute cap
+        - per-session queue keeps clips in spoken order
+        - `segmentEnd` set from how the clip ended (silence vs max length)
+      - add `/api/admin/stt` GET/POST/DELETE (global setting, same pattern as the translator)
+      - broadcast the engine to presenter consoles
+- [ ] `public/audio-capture.js` (new):
+      - AudioWorklet mic capture to 16 kHz mono PCM, wrapped as WAV
+      - silence gate: silent clips are never sent (cost, and Whisper invents text on silence)
+      - clips cut at about 0.7 s of silence or at the pace's max length (4/6/9 s)
+- [ ] `control.html`:
+      - engine indicator; browser or Whisper path
+      - after 2 consecutive failures, fall back to the browser engine automatically, with a warning
+- [ ] `admin.html`: "Speech recognition" card (engine, model, key, test & switch, reset).
+- [ ] `loadtest/`:
+      - `mock-stt.js`
+      - `attack.js` checks:
+        - anonymous POST refused
+        - oversize, non-WAV, too-long clip, unknown session/language refused
+        - rate limit returns 429
+        - cap enforced
+        - a binary frame on the WebSocket doesn't crash the server
+        - admin endpoints don't leak the key
+      - `load.js`:
+        - 2 sessions transcribing at once
+        - clips out of order still give in-order captions
+        - STT outage falls back to the browser engine
+- [ ] README: setup, cost, privacy note (audio goes to OpenAI/Azure instead of Google's Web Speech).
+
+## Risks
+- Latency: clip length plus upload and transcription (about 1-2 s, estimate) means captions
+  are about 5-10 s behind, versus 3-7 s today. Option B would be about 1-2 s, but is about
+  800 lines and riskier before the event.
+- Arabic quality on the new models is unverified; it needs a test with real speakers.
+- New moving parts days before the event. The browser engine stays the default and the fallback.
