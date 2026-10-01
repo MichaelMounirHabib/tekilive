@@ -16,14 +16,24 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .map(o => o.trim())
   .filter(Boolean);
 
-// The event's session codes (e.g. "MAIN,MAIN-2"). Anything else is refused,
-// which also stops strangers creating sessions that sit in memory. Empty
-// means any code is accepted, as before (local dev).
-const SESSION_CODES = (process.env.SESSION_CODES || '')
-  .split(',')
-  .map(c => c.trim().toUpperCase())
-  .filter(Boolean);
-const DEFAULT_SESSION = SESSION_CODES[0] || 'MAIN';
+// Any session code is accepted, but only a signed-in presenter can open one
+// (by connecting the console or saving branding), and at most MAX_SESSIONS
+// can be open at once. Attendees can only join a session that is already
+// open, so they can neither create sessions nor use up the slots. The format
+// is still checked, because codes end up in URLs and in the log ("[CODE] ..."),
+// where a newline or a 5 KB string has no business. 12 characters matches the
+// console's session code field.
+const DEFAULT_SESSION = 'MAIN';
+const SESSION_CODE_RE = /^[A-Z0-9-]{1,12}$/;
+function validSessionLimit(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 100 ? n : null;
+}
+// From env, changeable live from the admin dashboard (held in memory, so a
+// restart goes back to the env value). Lowering it never closes open
+// sessions; it only refuses new ones until enough have ended.
+const MAX_SESSIONS_DEFAULT = validSessionLimit(process.env.MAX_SESSIONS || 5) || 5;
+let maxSessions = MAX_SESSIONS_DEFAULT;
 
 // Only the path and query of a request are used. A constant base means a
 // malformed Host header can't make this throw (it used to, inside the
@@ -35,7 +45,7 @@ function requestUrl(req) {
 
 function sessionCodeFrom(raw) {
   const code = String(raw || DEFAULT_SESSION).trim().toUpperCase();
-  return SESSION_CODES.length === 0 || SESSION_CODES.includes(code) ? code : null;
+  return SESSION_CODE_RE.test(code) ? code : null;
 }
 
 // Mirrors LANGUAGES in public/join.html and public/control.html; keep them in
@@ -44,7 +54,6 @@ const LANGUAGE_CODES = new Set(['en', 'ar', 'fr', 'es', 'de', 'zh', 'pt', 'ru', 
 
 if (process.env.NODE_ENV === 'production') {
   const problems = auth.configProblems();
-  if (!SESSION_CODES.length) problems.push('SESSION_CODES is required (e.g. MAIN,MAIN-2)');
   if (problems.length) {
     // Starting anyway would leave the presenter socket open to anyone.
     console.error(`Refusing to start in production:\n - ${problems.join('\n - ')}`);
@@ -63,6 +72,12 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
+// The presenter page is the console in presenter mode (control.html decides
+// by its path), so both stay one copy of the speech-engine code.
+app.get('/present.html', (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  res.sendFile(path.join(__dirname, 'public', 'control.html'));
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (req, res) => res.status(200).send('ok'));
 
@@ -142,8 +157,47 @@ app.get('/api/admin/sessions', auth.requireAdmin, (req, res) => {
     audienceTotal: session.audience.size,
     audienceByLanguage: audienceStats(session),
     branding: brandingMeta(session),
+    // Admin-only listing: the presenter key lets the dashboard build each
+    // session's presenter link.
+    presenterKey: auth.presenterKey(code),
   }));
+  res.set('X-Session-Limit', String(maxSessions));
   res.json(list);
+});
+
+function sessionLimitStatus() {
+  return { maxSessions, defaultMaxSessions: MAX_SESSIONS_DEFAULT, source: maxSessions === MAX_SESSIONS_DEFAULT ? 'env' : 'admin', openSessions: sessions.size };
+}
+
+app.get('/api/admin/settings', auth.requireAdmin, (req, res) => res.json(sessionLimitStatus()));
+
+app.post('/api/admin/settings', auth.requireAdmin, (req, res) => {
+  const n = validSessionLimit((req.body || {}).maxSessions);
+  if (!n) return res.status(400).json({ error: 'Session limit must be a whole number from 1 to 100' });
+  maxSessions = n;
+  log(`session limit set to ${n} by ${req.authUser.email} (open now: ${sessions.size})`);
+  res.json(sessionLimitStatus());
+});
+
+app.delete('/api/admin/settings', auth.requireAdmin, (req, res) => {
+  maxSessions = MAX_SESSIONS_DEFAULT;
+  log(`session limit reset to ${maxSessions} by ${req.authUser.email}`);
+  res.json(sessionLimitStatus());
+});
+
+// Ends a session: tells every connected console and phone, closes their
+// sockets and frees the slot (for example a session opened with a typo).
+app.delete('/api/admin/sessions/:code', auth.requireAdmin, (req, res) => {
+  const code = sessionCodeFrom(req.params.code);
+  if (!code) return res.status(400).json({ error: 'Invalid session code' });
+  const session = sessions.get(code);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  sessions.delete(code);
+  const payload = JSON.stringify({ type: 'session_ended' });
+  log(`[${code}] session ended by ${req.authUser.email} (speakers=${session.speakers.size}, audience=${session.audience.size})`);
+  session.speakers.forEach((s) => { safeSend(s, payload); s.close(1000, 'Session ended'); });
+  session.audience.forEach((meta, client) => { safeSend(client, payload); client.close(1000, 'Session ended'); });
+  res.json({ ok: true });
 });
 
 // Translation provider, switchable live from the admin dashboard. The raw
@@ -202,19 +256,23 @@ function brandingMeta(session) {
 
 app.get('/api/session/:code/branding', (req, res) => {
   const code = sessionCodeFrom(req.params.code);
-  if (!code) return res.status(404).json({ error: 'Session not found' });
-  res.json(brandingMeta(sessions.get(code)));
+  if (!code) return res.status(400).json({ error: 'Invalid session code' });
+  const session = sessions.get(code);
+  // 404 also tells the join page to wait: the presenter hasn't opened it yet.
+  if (!session) return res.status(404).json({ error: 'Session not started' });
+  res.json(brandingMeta(session));
 });
 
 app.post('/api/session/:code/branding', auth.requireAdmin, (req, res) => {
   const code = sessionCodeFrom(req.params.code);
-  if (!code) return res.status(404).json({ error: 'Session not found' });
+  if (!code) return res.status(400).json({ error: 'Invalid session code' });
   upload(req, res, (err) => {
     if (err) {
       log(`[${code}] branding upload rejected:`, err.message);
       return res.status(400).json({ error: err.message });
     }
-    const session = getSession(code);
+    const session = openSession(code);
+    if (!session) return res.status(429).json({ error: sessionLimitMessage() });
     const body = req.body || {}; // undefined in Express 5 when the request isn't multipart
     if (typeof body.eventName === 'string') session.branding.eventName = body.eventName.slice(0, 120);
     if (typeof body.orgName === 'string') session.branding.orgName = body.orgName.slice(0, 120);
@@ -246,9 +304,20 @@ app.get('/api/session/:code/logo/:kind', (req, res) => {
   res.send(logo.data);
 });
 
+// The presenter page sends its key as a WebSocket subprotocol
+// ("tekilive-presenter", <key>) rather than in the URL, so it never shows up
+// in request logs or browser history.
+const PRESENTER_PROTOCOL = 'tekilive-presenter';
+function presenterKeyFrom(req) {
+  const offered = String(req.headers['sec-websocket-protocol'] || '').split(',').map(p => p.trim());
+  return offered[0] === PRESENTER_PROTOCOL ? offered[1] || '' : '';
+}
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
+  // Echo only our marker, never the key itself.
+  handleProtocols: (protocols) => (protocols.has(PRESENTER_PROTOCOL) ? PRESENTER_PROTOCOL : false),
   // Captions are a few hundred bytes. The library default (100 MiB) would let
   // one client make the server buffer and parse a huge message.
   maxPayload: 16 * 1024,
@@ -258,16 +327,27 @@ const wss = new WebSocketServer({
     const url = requestUrl(info.req);
     if (!url) return cb(false, 400, 'Bad request');
     const role = url.searchParams.get('role') || 'audience';
-    if (!sessionCodeFrom(url.searchParams.get('session'))) return cb(false, 404, 'Session not found');
+    const code = sessionCodeFrom(url.searchParams.get('session'));
+    if (!code) return cb(false, 400, 'Invalid session code');
 
     if (role !== 'speaker') {
-      // Audience join links stay open, no login needed.
-      return LANGUAGE_CODES.has(url.searchParams.get('lang') || 'en') ? cb(true) : cb(false, 400, 'Unsupported language');
+      // Audience join links stay open, no login needed, but only for a
+      // session a presenter has already opened.
+      if (!LANGUAGE_CODES.has(url.searchParams.get('lang') || 'en')) return cb(false, 400, 'Unsupported language');
+      return sessions.has(code) ? cb(true) : cb(false, 404, 'Session not started');
     }
 
-    // Without a configured admin account nobody can sign in, so the
-    // presenter socket is refused, same as the admin pages.
-    return auth.readUserFromRequest(info.req) ? cb(true) : cb(false, 401, 'Sign in required');
+    // A presenter comes in one of two ways. Signed in as admin (the control
+    // page): may open the session if a slot is free. With the session's
+    // presenter key (the presenter page): only into a session the admin has
+    // already opened. Without a configured admin account neither works.
+    if (auth.readUserFromRequest(info.req)) {
+      return sessions.has(code) || sessions.size < maxSessions ? cb(true) : cb(false, 429, 'Session limit reached');
+    }
+    if (auth.checkPresenterKey(code, presenterKeyFrom(info.req))) {
+      return sessions.has(code) ? cb(true) : cb(false, 404, 'Session not started');
+    }
+    return cb(false, 401, 'Sign in required');
   },
 });
 wss.on('error', (err) => log('WebSocket server error:', err.message));
@@ -284,8 +364,15 @@ wss.on('error', (err) => log('WebSocket server error:', err.message));
  */
 const sessions = new Map();
 
-function getSession(code) {
+function sessionLimitMessage() {
+  return `Session limit reached (${maxSessions}). End a session in the admin dashboard first.`;
+}
+
+// Returns the session, creating it if there is a free slot; null when the
+// limit is reached. Only presenter paths call this; attendees never create.
+function openSession(code) {
   if (!sessions.has(code)) {
+    if (sessions.size >= maxSessions) return null;
     sessions.set(code, {
       speakers: new Set(),
       audience: new Map(),
@@ -384,6 +471,9 @@ function sessionHasBranding(session) {
 // reloading their console, or a lull with zero attendees connected,
 // shouldn't silently wipe out logos/names they already uploaded.
 function pruneSessionIfEmpty(code, session) {
+  // The identity check stops a socket of an ended session from deleting a
+  // newer session that was opened under the same code afterwards.
+  if (sessions.get(code) !== session) return;
   if (session.speakers.size === 0 && session.audience.size === 0 && !sessionHasBranding(session)) {
     sessions.delete(code);
   }
@@ -417,7 +507,15 @@ wss.on('connection', (ws, req) => {
   const url = requestUrl(req); // checked in verifyClient
   const role = url.searchParams.get('role') || 'audience';
   const sessionCode = sessionCodeFrom(url.searchParams.get('session')); // checked in verifyClient
-  const session = getSession(sessionCode);
+  // verifyClient already checked the slot / that the session exists, but
+  // another presenter or an "End session" can land in between.
+  // Only an admin may open a session; a presenter key needs it open already.
+  const isAdmin = !!auth.readUserFromRequest(req);
+  const session = role === 'speaker' && isAdmin ? openSession(sessionCode) : sessions.get(sessionCode);
+  if (!session) {
+    ws.on('error', () => {});
+    return ws.close(1008, role === 'speaker' ? 'Session limit reached' : 'Session not started');
+  }
 
   // A malformed frame (bad opcode, oversized message, invalid UTF-8) makes
   // the socket emit 'error'. Without a listener Node treats that as an
@@ -428,7 +526,8 @@ wss.on('connection', (ws, req) => {
   if (role === 'speaker') {
     session.speakers.add(ws);
     log(`[${sessionCode}] speaker connected (speakers=${session.speakers.size}, audience=${session.audience.size})`);
-    safeSend(ws, JSON.stringify({ type: 'joined', role: 'speaker', session: sessionCode, branding: brandingMeta(session) }));
+    // The admin console also gets the presenter key, to show the presenter link.
+    safeSend(ws, JSON.stringify({ type: 'joined', role: 'speaker', session: sessionCode, branding: brandingMeta(session), presenterKey: isAdmin ? auth.presenterKey(sessionCode) : undefined }));
     broadcastStats(session);
 
     // The console sends the transcript in small chunks while the speaker is

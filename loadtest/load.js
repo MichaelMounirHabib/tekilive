@@ -252,6 +252,10 @@ async function main() {
   await login();
   await uploadLogos();
   const extra = {};
+  // Presenters first: attendees can only join a session a presenter has opened.
+  const talk = startSpeakers();
+  await talk.ready;
+  extra.speakerRejected = talk.speakers.filter((s) => s.rejected).map((s) => `${s.session}:${s.rejected}`);
 
   if (opt.mode === 'burst') {
     const t = Date.now();
@@ -259,11 +263,9 @@ async function main() {
     const joins = clients.filter((c) => c.joinedAt).map((c) => c.joinedAt - c.pageStart).sort((a, b) => a - b);
     extra.burst = { wallMs: Date.now() - t, joinMs: { p50: pct(joins, 50), p95: pct(joins, 95), max: joins.length ? joins[joins.length - 1] : null } };
     opt.duration = 0;
+    talk.speakers.forEach((s) => s.ws.close());
   } else {
     extra.connectWallMs = await connectAll(false);
-    const talk = startSpeakers();
-    await talk.ready;
-    extra.speakerRejected = talk.speakers.filter((s) => s.rejected).map((s) => `${s.session}:${s.rejected}`);
     await sleep(1000);
     const logoBefore = { bytes: counters.logoBytes, requests: counters.logoRequests };
     const ticks = Math.floor((opt.duration * 1000) / opt.interval);

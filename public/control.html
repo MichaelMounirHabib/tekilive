@@ -147,7 +147,7 @@
   <div id="micStatus" style="display:none; color:var(--gray); font-size:12.5px; margin:-14px 0 24px;"></div>
   <div id="translationWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
 
-  <div class="panel" style="margin-bottom:24px;">
+  <div class="panel" id="brandingPanel" style="margin-bottom:24px;">
     <div class="panel-title">Event branding — shown to your audience</div>
     <div class="branding-grid">
       <div>
@@ -192,11 +192,18 @@
         <div class="stat-row"><span>Connected devices</span><span class="stat-count" id="totalCount">0</span></div>
         <div class="stat-row"><span>Translation latency</span><span class="stat-count" id="latencyValue">—</span></div>
       </div>
-      <div class="qr-wrap">
+      <div class="qr-wrap" id="qrWrap">
         <img id="qrImg" alt="QR code to join">
         <div>
           <div style="font-size:13px; margin-bottom:4px;">Audience scans to join</div>
           <div class="qr-url" id="qrUrl">Starting server…</div>
+        </div>
+      </div>
+      <div id="presenterLinkWrap" style="display:none; margin-top:14px;">
+        <div style="font-size:13px; margin-bottom:6px;">Presenter link: send it to the speaker. It opens the presenter page for this session only, with no sign-in. Keep it private.</div>
+        <div style="display:flex; gap:8px;">
+          <input id="presenterLinkInput" readonly>
+          <button class="btn-outline" id="copyPresenterLinkBtn">Copy</button>
         </div>
       </div>
     </div>
@@ -292,6 +299,21 @@ const micWarning = document.getElementById('micWarning');
 const translationWarning = document.getElementById('translationWarning');
 const micStatus = document.getElementById('micStatus');
 
+// /present.html is this console in presenter mode, opened from a presenter
+// link (/present.html?session=CODE#key=KEY). The key sits after "#", which the
+// browser never sends to the server, and goes to the caption socket as a
+// subprotocol. No sign-in, and none of the admin tools: the session field is
+// fixed, and branding and the presenter link are hidden. The attendee QR and
+// join link stay, so the speaker can put them on screen.
+const PRESENTER_MODE = location.pathname === '/present.html';
+const presenterKey = PRESENTER_MODE ? (new URLSearchParams(location.hash.slice(1)).get('key') || '') : '';
+if (PRESENTER_MODE) {
+  sessionInput.value = (new URLSearchParams(location.search).get('session') || '').trim().toUpperCase();
+  sessionInput.disabled = true;
+  document.getElementById('brandingPanel').style.display = 'none';
+  document.title = 'TekiLive — Presenter';
+}
+
 // Flight recorder: a rolling record of what the speech engine, the chunker
 // and the server connection are each doing, posted to the server every couple
 // of seconds (only if the server has CLIENT_LOG=1 — otherwise it answers 404
@@ -356,10 +378,10 @@ updateFeedDirection();
 
 function setupQr(){
   const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
+  sessionBadge.textContent = code;
   const joinUrl = `${location.origin}/join.html?session=${code}`;
   qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(joinUrl)}`;
   qrUrl.textContent = joinUrl;
-  sessionBadge.textContent = code;
 }
 sessionInput.addEventListener('change', setupQr);
 setupQr();
@@ -440,14 +462,30 @@ const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
 let lastServerMessageAt = Date.now();
 let connectedCode = null;
 
+// Admin consoles get the session's presenter key when they connect; build the
+// link the speaker opens. Presenter consoles never receive it.
+const presenterLinkWrap = document.getElementById('presenterLinkWrap');
+const presenterLinkInput = document.getElementById('presenterLinkInput');
+function showPresenterLink(code, key){
+  if (PRESENTER_MODE || !key) { presenterLinkWrap.style.display = 'none'; return; }
+  presenterLinkInput.value = `${location.origin}/present.html?session=${encodeURIComponent(code)}#key=${encodeURIComponent(key)}`;
+  presenterLinkWrap.style.display = 'block';
+}
+document.getElementById('copyPresenterLinkBtn').addEventListener('click', async (e) => {
+  try { await navigator.clipboard.writeText(presenterLinkInput.value); e.target.textContent = 'Copied'; }
+  catch (err) { presenterLinkInput.select(); e.target.textContent = 'Press Ctrl+C'; }
+  setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+});
+
 function connectWs(){
   const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
   connectedCode = code;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
+  const url = `${proto}://${location.host}?role=speaker&session=${code}`;
+  const socket = PRESENTER_MODE ? new WebSocket(url, ['tekilive-presenter', presenterKey]) : new WebSocket(url);
   ws = socket;
   lastServerMessageAt = Date.now();
-  socket.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); dbg('ws-open', code); flushOutbox(); };
+  socket.onopen = () => { socket.opened = true; statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); dbg('ws-open', code); flushOutbox(); };
   socket.onclose = () => {
     dbg('ws-close', socket.manualClose ? 'manual' : 'unexpected — reconnecting');
     // Flag lives on the socket itself, not a shared variable — closing this
@@ -456,11 +494,31 @@ function connectWs(){
     // let this stale handler schedule a duplicate reconnect anyway).
     if (socket.manualClose) return;
     statusText.textContent = 'Disconnected — retrying…';
+    if (PRESENTER_MODE) {
+      // A presenter link only works once the admin has opened the session
+      // (and again after a server restart, once the admin console is back).
+      if (socket.opened) return setTimeout(connectWs, 1500);
+      statusText.textContent = `Waiting for session ${code} to be opened by the admin. If this keeps showing, ask for a new presenter link.`;
+      return setTimeout(connectWs, 5000);
+    }
     // The server refuses the caption socket once the sign-in has expired (or
     // was ended in another tab); retrying would loop forever, so ask to sign
     // in again instead. A network error here just means keep retrying.
     fetch('/api/auth/me')
-      .then(res => { if (res.status === 401) showLogin(); else setTimeout(connectWs, 1500); })
+      .then(res => {
+        if (res.status === 401) return showLogin();
+        if (socket.opened) return setTimeout(connectWs, 1500);
+        // Refused before it opened: most likely every session slot is taken.
+        // Say so, and keep trying, so it connects once an admin ends one.
+        return fetch('/api/admin/sessions').then(r => r.ok ? r.json().then(list => {
+          const limit = Number(r.headers.get('X-Session-Limit'));
+          if (limit && list.length >= limit && !list.some(s => s.code === code)) {
+            statusText.textContent = `Can't open session ${code}: all ${limit} sessions are in use. End one in the admin dashboard; this console keeps trying.`;
+            return setTimeout(connectWs, 5000);
+          }
+          setTimeout(connectWs, 1500);
+        }) : setTimeout(connectWs, 1500));
+      })
       .catch(() => setTimeout(connectWs, 1500));
   };
   socket.onmessage = (evt) => {
@@ -468,7 +526,14 @@ function connectWs(){
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
     if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
+    if (msg.type === 'joined') showPresenterLink(code, msg.presenterKey);
     if (msg.type === 'branding') renderBranding(msg.branding);
+    if (msg.type === 'session_ended') {
+      // Ended from the admin dashboard. Don't reopen it by reconnecting;
+      // changing the session code (or reloading) starts again on purpose.
+      socket.manualClose = true;
+      statusText.textContent = `Session ${code} was ended from the admin dashboard. Change the code or reload to start again.`;
+    }
     if (msg.type === 'error') dbg('server-error', `${msg.lang}: ${msg.detail || msg.message}`);
     if (msg.type === 'delivered') dbg('delivered', `${msg.lang} ${msg.latency}ms`);
     if (msg.type === 'error'){
@@ -812,8 +877,10 @@ const adminLink = document.getElementById('adminLink');
 function showConsole(user){
   loginScreen.style.display = 'none';
   consoleWrap.style.display = 'block';
-  logoutBtn.style.display = 'inline-block';
-  adminLink.style.display = 'inline-block';
+  if (!PRESENTER_MODE) {
+    logoutBtn.style.display = 'inline-block';
+    adminLink.style.display = 'inline-block';
+  }
   connectWs();
 }
 
@@ -851,6 +918,18 @@ logoutBtn.addEventListener('click', async () => {
 });
 
 (async function bootstrapAuth(){
+  if (PRESENTER_MODE) {
+    // The presenter link is the credential; the server checks it on the socket.
+    if (!sessionInput.value || !presenterKey) {
+      loginScreen.style.display = 'none';
+      consoleWrap.style.display = 'block';
+      toggleBtn.disabled = true;
+      statusText.textContent = 'This presenter link is incomplete. Ask the admin for the full link.';
+      return;
+    }
+    showConsole(null);
+    return;
+  }
   try {
     const res = await fetch('/api/auth/me');
     if (res.ok) { showConsole(await res.json()); return; }

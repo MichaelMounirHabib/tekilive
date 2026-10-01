@@ -21,8 +21,6 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
-      - key: SESSION_CODES
-        sync: false
       - key: SESSION_SECRET
         sync: false
       - key: ADMIN_EMAIL

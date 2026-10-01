@@ -211,21 +211,44 @@ function renderBranding(b){
   showDivider(document.getElementById('capBrandingSep2'), !!(eventLogoSrc && orgLogoSrc));
 }
 
-fetch(`/api/session/${sessionCode}/branding`)
-  .then(res => {
-    if (res.status === 404) { showSessionNotFound(); return null; }
-    return res.ok ? res.json() : null;
-  })
-  .then(b => { if (b) renderBranding(b); })
-  .catch(() => {});
+// Only a session the presenter has opened can be joined. 400 means the code
+// itself is malformed; 404 means it hasn't started yet, so keep checking and
+// show the language picker as soon as it opens (people scan the QR early).
+const pickerTitle = document.querySelector('#picker h1');
+const pickerLede = document.querySelector('#picker .lede');
+const pickerTitleText = pickerTitle.textContent, pickerLedeText = pickerLede.textContent;
 
-// The server only accepts the event's own session codes, so a mistyped link
-// would otherwise sit on "reconnecting…" forever.
-function showSessionNotFound(){
-  document.querySelector('#picker h1').textContent = 'Session not found';
-  document.querySelector('#picker .lede').textContent = `There is no session "${sessionCode}". Check the code in your link, or scan the QR code again.`;
+function showPickerMessage(title, text){
+  pickerTitle.textContent = title;
+  pickerLede.textContent = text;
   grid.style.display = 'none';
 }
+
+function checkSession(){
+  fetch(`/api/session/${sessionCode}/branding`)
+    .then(res => {
+      if (res.status === 400) {
+        showPickerMessage('Session not found', `"${sessionCode}" is not a valid session code. Check the code in your link, or scan the QR code again.`);
+        return null;
+      }
+      if (res.status === 404) {
+        showPickerMessage('Not started yet', `Session ${sessionCode} hasn't started yet. This page opens by itself as soon as it does.`);
+        // Spread out so a room of phones that scanned early don't poll in step.
+        setTimeout(checkSession, 4000 + Math.random() * 3000);
+        return null;
+      }
+      return res.ok ? res.json() : null;
+    })
+    .then(b => {
+      if (!b) return;
+      pickerTitle.textContent = pickerTitleText;
+      pickerLede.textContent = pickerLedeText;
+      grid.style.display = '';
+      renderBranding(b);
+    })
+    .catch(() => setTimeout(checkSession, 5000));
+}
+checkSession();
 
 const MAX_CAPTION_LINES = 40;
 const capFeed = document.getElementById('capFeed');
@@ -412,6 +435,11 @@ function connect(langCode){
       if (msg.type === 'segment_end') openLine = null;
       if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
       if (msg.type === 'branding') renderBranding(msg.branding);
+      if (msg.type === 'session_ended'){
+        // Ended from the admin dashboard: stop reconnecting for good.
+        manualClose = true;
+        statusText.textContent = 'This session has ended.';
+      }
     } catch (err) {
       console.error('onmessage failed', err);
       statusText.textContent = `Display error: ${err.message}`;

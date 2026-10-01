@@ -53,6 +53,19 @@ function checkAdminCredentials(email, password) {
   return emailOk && passwordOk;
 }
 
+// A per-session presenter key, derived rather than stored so a presenter
+// link keeps working after a server restart once the admin reopens the
+// session. Revoke a leaked link by using a different session code, or all
+// of them by changing SESSION_SECRET.
+function presenterKey(sessionCode) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(`presenter:${sessionCode}`).digest('base64url').slice(0, 22);
+}
+
+function checkPresenterKey(sessionCode, key) {
+  if (!isEnabled() || typeof key !== 'string' || !key) return false;
+  return sameSecret(key, presenterKey(sessionCode));
+}
+
 function signToken() {
   return jwt.sign({ email: ADMIN_EMAIL, role: 'admin' }, SESSION_SECRET, { expiresIn: TOKEN_TTL, algorithm: 'HS256' });
 }
@@ -105,6 +118,8 @@ module.exports = {
   missingSettings,
   configProblems,
   checkAdminCredentials,
+  presenterKey,
+  checkPresenterKey,
   signToken,
   cookieHeader,
   clearCookieHeader,

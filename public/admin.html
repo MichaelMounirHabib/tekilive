@@ -101,6 +101,13 @@
 
   <div class="panel">
     <div class="panel-title"><span>Active sessions</span><span id="sessionsUpdated"></span></div>
+    <div class="provider-actions" style="align-items:center; margin-bottom:16px;">
+      <label for="sessionLimitInput" style="margin:0;">Session limit</label>
+      <input id="sessionLimitInput" type="number" min="1" max="100" style="width:90px;">
+      <button class="btn-outline" id="saveLimitBtn">Save</button>
+      <button class="btn-outline" id="resetLimitBtn">Reset to default</button>
+      <span class="form-status" id="limitStatus" style="margin:0;"></span>
+    </div>
     <div id="sessionsList"></div>
   </div>
 
@@ -185,6 +192,7 @@ function afterAuth(user){
   if (user.role !== 'admin') { show(loginScreen); return; }
   show(adminWrap);
   refreshSessions();
+  refreshLimit();
   refreshTranslator();
   startPolling();
 }
@@ -205,11 +213,14 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
-function renderSessions(list){
+function renderSessions(list, limit){
   const el = document.getElementById('sessionsList');
-  document.getElementById('sessionsUpdated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  document.getElementById('sessionsUpdated').textContent = `${list.length} of ${limit || '?'} sessions · updated ${new Date().toLocaleTimeString()}`;
   if (!list.length){
-    el.innerHTML = '<div class="empty-note">No active sessions right now. A session appears here as soon as a presenter or attendee connects.</div>';
+    const note = document.createElement('div');
+    note.className = 'empty-note';
+    note.textContent = 'No open sessions. A session opens when a presenter connects the console or saves branding with its code.';
+    el.replaceChildren(note);
     return;
   }
   el.innerHTML = list.map(s => {
@@ -227,6 +238,10 @@ function renderSessions(list){
             <span class="badge ${s.speakerConnected ? 'live' : 'idle'}" style="margin-left:8px;">${s.speakerConnected ? 'Presenter connected' : 'No presenter'}</span>
           </div>
           <span class="session-event">${eventLine}</span>
+          <span>
+            <button class="btn-outline copy-presenter-btn" data-code="${escapeHtml(s.code)}" data-key="${escapeHtml(s.presenterKey || '')}">Copy presenter link</button>
+            <button class="btn-outline end-session-btn" data-code="${escapeHtml(s.code)}">End session</button>
+          </span>
         </div>
         <div class="lang-chips">
           <span class="lang-chip">Total audience: ${s.audienceTotal}</span>
@@ -234,12 +249,69 @@ function renderSessions(list){
         </div>
       </div>`;
   }).join('');
+  el.querySelectorAll('.end-session-btn').forEach(btn => btn.addEventListener('click', () => endSession(btn.dataset.code)));
+  el.querySelectorAll('.copy-presenter-btn').forEach(btn => btn.addEventListener('click', () => copyPresenterLink(btn)));
+}
+
+// The key goes after "#", so the browser never sends it to the server.
+async function copyPresenterLink(btn){
+  const link = `${location.origin}/present.html?session=${encodeURIComponent(btn.dataset.code)}#key=${encodeURIComponent(btn.dataset.key)}`;
+  try { await navigator.clipboard.writeText(link); btn.textContent = 'Copied'; }
+  catch (err) { prompt('Copy the presenter link:', link); }
+  setTimeout(() => { btn.textContent = 'Copy presenter link'; }, 2000);
+}
+
+// --- Session limit ------------------------------------------------------
+const sessionLimitInput = document.getElementById('sessionLimitInput');
+const limitStatus = document.getElementById('limitStatus');
+
+function renderLimit(s){
+  sessionLimitInput.value = s.maxSessions;
+  limitStatus.classList.remove('error');
+  limitStatus.textContent = s.source === 'admin'
+    ? `Set here (default from server settings: ${s.defaultMaxSessions}). Lowering it never closes open sessions.`
+    : `Default from server settings. Lowering it never closes open sessions.`;
+}
+
+async function refreshLimit(){
+  try {
+    const res = await fetch('/api/admin/settings');
+    if (res.ok) renderLimit(await res.json());
+  } catch (e) {}
+}
+
+async function sendLimit(method, body){
+  try {
+    const res = await fetch('/api/admin/settings', { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not change the limit');
+    renderLimit(data);
+    refreshSessions();
+  } catch (err) {
+    limitStatus.textContent = err.message;
+    limitStatus.classList.add('error');
+  }
+}
+document.getElementById('saveLimitBtn').addEventListener('click', () => sendLimit('POST', { maxSessions: Number(sessionLimitInput.value) }));
+document.getElementById('resetLimitBtn').addEventListener('click', () => sendLimit('DELETE'));
+
+// Closes every console and phone on the session and frees its slot.
+async function endSession(code){
+  if (!confirm(`End session ${code}? Its presenter console and every attendee are disconnected, and its branding is removed.`)) return;
+  try {
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not end the session');
+  } catch (err) {
+    alert(err.message);
+  }
+  refreshSessions();
 }
 
 async function refreshSessions(){
   try {
     const res = await fetch('/api/admin/sessions');
-    if (res.ok) renderSessions(await res.json());
+    if (res.ok) renderSessions(await res.json(), Number(res.headers.get('X-Session-Limit')));
   } catch (e) {}
 }
 

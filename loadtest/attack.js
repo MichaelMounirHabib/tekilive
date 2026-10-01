@@ -141,11 +141,144 @@ async function checkBogusLang() {
   record('F6 unknown language is refused', !r.opened, r.opened ? 'opened' : `refused ${r.status}`);
 }
 
-async function checkUnknownSession() {
-  const r = await tryWs(`${wsBase}/?role=audience&session=NOPE-${Date.now()}&lang=fr`);
-  const res = await fetch(`${base}/api/session/NOPE-${Date.now()}/branding`);
-  record('F7 unknown session code is refused', !r.opened && res.status === 404,
+async function checkMalformedSessionCode() {
+  const bad = ['BAD!CODE', 'A'.repeat(13), 'NEW%0ALINE'];
+  const outcomes = [];
+  for (const code of bad) {
+    const r = await tryWs(`${wsBase}/?role=audience&session=${code}&lang=fr`);
+    const res = await fetch(`${base}/api/session/${code}/branding`);
+    outcomes.push({ code, ok: !r.opened && r.status === 400 && res.status === 400, detail: `${code}: socket ${r.opened ? 'opened' : r.status}, GET ${res.status}` });
+  }
+  record('F7 malformed session code is refused', outcomes.every((o) => o.ok), outcomes.map((o) => o.detail).join('; '));
+}
+
+async function checkAttendeeCannotOpenSession() {
+  const code = 'NOTOPEN1';
+  const r = await tryWs(`${wsBase}/?role=audience&session=${code}&lang=fr`);
+  const res = await fetch(`${base}/api/session/${code}/branding`);
+  record('Attendees cannot open a session', !r.opened && r.status === 404 && res.status === 404,
     `socket ${r.opened ? 'opened' : `refused ${r.status}`}, branding GET HTTP ${res.status}`);
+}
+
+// A presenter-page socket: no cookie, the key as a subprotocol.
+function openWithPresenterKey(code, key) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`${wsBase}/?role=speaker&session=${code}`, ['tekilive-presenter', key], { headers: { Origin: base } });
+    const timer = setTimeout(() => resolve({ ws, opened: false, status: 'timeout' }), 3000);
+    ws.on('open', () => { clearTimeout(timer); resolve({ ws, opened: true, protocol: ws.protocol }); });
+    ws.on('unexpected-response', (req, res) => { clearTimeout(timer); resolve({ ws, opened: false, status: res.statusCode }); });
+    ws.on('error', () => {});
+  });
+}
+
+async function checkPresenterKeys() {
+  const { list } = await adminSessions();
+  const main = list.find((s) => s.code === session);
+  const key = main && main.presenterKey;
+  const wrong = await openWithPresenterKey(session, 'not-the-right-key-000');
+  const right = key ? await openWithPresenterKey(session, key) : { opened: false, status: 'no key' };
+  record('Presenter link: wrong key refused, right key opens', !wrong.opened && wrong.status === 401 && right.opened && right.protocol === 'tekilive-presenter',
+    `wrong ${wrong.opened ? 'opened' : wrong.status}, right ${right.opened ? `opened (protocol echoed: ${right.protocol})` : right.status}`);
+  if (right.ws) right.ws.close();
+  if (wrong.ws) wrong.ws.close();
+
+  // A key can't open a session: take one from a session, end it, try again.
+  const opener = await openSpeaker('KEYTEST');
+  const keyed = (await adminSessions()).list.find((s) => s.code === 'KEYTEST');
+  await endSession('KEYTEST');
+  opener.ws.close();
+  await sleep(200);
+  const reopen = keyed ? await openWithPresenterKey('KEYTEST', keyed.presenterKey) : { opened: false, status: 'no key' };
+  record('Presenter link cannot open a closed session', !reopen.opened && reopen.status === 404, `after end: ${reopen.opened ? 'opened' : reopen.status}`);
+  if (reopen.ws) reopen.ws.close();
+  const anon = await fetch(`${base}/api/admin/sessions`);
+  record('Presenter keys are admin-only', anon.status === 403, `anonymous session list HTTP ${anon.status}`);
+}
+
+async function checkSessionLimitSetting() {
+  const headers = { 'Content-Type': 'application/json', Cookie: cookie };
+  const anonGet = await fetch(`${base}/api/admin/settings`);
+  const anonPost = await fetch(`${base}/api/admin/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"maxSessions":99}' });
+  record('Session limit setting needs admin', anonGet.status === 403 && anonPost.status === 403, `GET ${anonGet.status}, POST ${anonPost.status}`);
+
+  const bad = [];
+  for (const v of [0, 101, 2.5, 'x']) bad.push((await fetch(`${base}/api/admin/settings`, { method: 'POST', headers, body: JSON.stringify({ maxSessions: v }) })).status);
+  record('Invalid session limits rejected', bad.every((s) => s === 400), `0/101/2.5/"x" -> ${bad.join(', ')}`);
+
+  // Lower the limit to what is open now (the probe session): one more is refused.
+  const openNow = (await adminSessions()).list.length;
+  const set = await (await fetch(`${base}/api/admin/settings`, { method: 'POST', headers, body: JSON.stringify({ maxSessions: openNow }) })).json();
+  const blocked = await openSpeaker('LIMITX');
+  const reset = await (await fetch(`${base}/api/admin/settings`, { method: 'DELETE', headers })).json();
+  const after = await openSpeaker('LIMITX');
+  record('Lowering the limit blocks new sessions; reset restores it',
+    set.maxSessions === openNow && !blocked.opened && blocked.status === 429 && after.opened,
+    `limit ${set.maxSessions} with ${openNow} open: new ${blocked.opened ? 'opened' : blocked.status}; reset to ${reset.maxSessions}: new ${after.opened ? 'opened' : after.status}`);
+  blocked.ws.close();
+  after.ws.close();
+  await sleep(200);
+  await endSession('LIMITX');
+}
+
+// A presenter socket that stays open; resolves once it is open, refused, or
+// after 3 s, so a dropped connection can never hang the run.
+function openSpeaker(code) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`${wsBase}/?role=speaker&session=${code}`, { headers: { Origin: base, Cookie: cookie } });
+    const timer = setTimeout(() => resolve({ ws, opened: false, status: 'timeout' }), 3000);
+    ws.on('open', () => { clearTimeout(timer); resolve({ ws, opened: true }); });
+    ws.on('unexpected-response', (req, res) => { clearTimeout(timer); resolve({ ws, opened: false, status: res.statusCode }); });
+    ws.on('error', () => {});
+  });
+}
+
+async function adminSessions() {
+  const res = await fetch(`${base}/api/admin/sessions`, { headers: { Cookie: cookie } });
+  return { list: await res.json(), limit: Number(res.headers.get('X-Session-Limit')) };
+}
+
+async function endSession(code) {
+  return (await fetch(`${base}/api/admin/sessions/${code}`, { method: 'DELETE', headers: { Cookie: cookie } })).status;
+}
+
+async function checkSessionCapAndEnd() {
+  const anonEnd = await fetch(`${base}/api/admin/sessions/MAIN`, { method: 'DELETE' });
+  record('Ending a session needs admin', anonEnd.status === 403, `anonymous DELETE HTTP ${anonEnd.status}`);
+
+  const { list, limit } = await adminSessions();
+  const opened = [];
+  for (let i = 1; list.length + opened.length < limit; i++) opened.push({ code: `CAP${i}`, ...(await openSpeaker(`CAP${i}`)) });
+  const extra = await openSpeaker('CAPX');
+  record(`Session cap (${limit}) refuses one more`, opened.every((o) => o.opened) && !extra.opened && extra.status === 429,
+    `filled ${opened.length} slots, extra session ${extra.opened ? 'opened' : `refused ${extra.status}`}`);
+
+  // An attendee on the first CAP session is told and disconnected when it ends.
+  const target = opened[0];
+  let ended = null, closed = null;
+  if (target) {
+    const ws = new WebSocket(`${wsBase}/?role=audience&session=${target.code}&lang=fr`, { headers: { Origin: base } });
+    let gotEnded = false;
+    ws.on('message', (d) => { if (String(d).includes('session_ended')) gotEnded = true; });
+    ws.on('error', () => {});
+    // Listen for the close before ending the session: the server can close
+    // the socket before the DELETE response arrives.
+    const closedP = new Promise((r) => {
+      ws.on('close', (c) => r({ gotEnded, code: c }));
+      setTimeout(() => r(null), 5000);
+    });
+    const opened = await new Promise((r) => { ws.on('open', () => r(true)); ws.on('unexpected-response', () => r(false)); setTimeout(() => r(false), 3000); });
+    if (opened) { ended = { status: await endSession(target.code) }; closed = await closedP; }
+  }
+  const retry = await openSpeaker('CAPX');
+  record('End session disconnects everyone and frees the slot',
+    !!closed && ended.status === 200 && closed.gotEnded && retry.opened,
+    closed ? `DELETE ${ended.status}, attendee got session_ended=${closed.gotEnded} close=${closed.code}, new session after: ${retry.opened ? 'opened' : retry.status}` : 'no CAP session to end');
+
+  for (const o of opened) o.ws.close();
+  extra.ws.close();
+  retry.ws.close();
+  await sleep(200);
+  for (const code of ['CAPX', ...opened.map((o) => o.code)]) await endSession(code);
 }
 
 async function checkTranslatorAnon() {
@@ -200,6 +333,11 @@ async function checkLoginRateLimit() {
 async function main() {
   const signedIn = await login().catch(() => false);
   console.log(`admin login: ${signedIn ? 'ok' : 'not available'}\n`);
+  // Attendees can only join an open session, so a presenter holds the probed
+  // session open for the whole run (otherwise the frame checks below would be
+  // refused at the handshake and prove nothing).
+  const holder = signedIn ? await openSpeaker(session) : null;
+  if (!holder || !holder.opened) console.log(`warning: could not open session ${session} as presenter; socket checks run against a refused handshake\n`);
   for (const crashCheck of [checkMalformedFrame, checkNullMessage, checkBadHost]) {
     if (!(await crashCheck())) {
       console.log('\nServer is down; remaining checks skipped.');
@@ -211,10 +349,17 @@ async function main() {
   await checkSvg();
   await checkSpeakerNoLogin();
   await checkBogusLang();
-  await checkUnknownSession();
+  await checkMalformedSessionCode();
+  await checkAttendeeCannotOpenSession();
+  if (signedIn) {
+    await checkSessionCapAndEnd();
+    await checkPresenterKeys();
+    await checkSessionLimitSetting();
+  } else record('Session cap, presenter links and limit (admin checks)', false, 'skipped: no admin login');
   await checkTranslatorAnon();
   if (signedIn) await checkTranslatorAdmin();
   else record('Provider settings (admin checks)', false, 'skipped: no admin login');
+  if (holder && holder.ws) holder.ws.close();
   await checkHeaders();
   await checkLoginRateLimit();
   await sleep(100);

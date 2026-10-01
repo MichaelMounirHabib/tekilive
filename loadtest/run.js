@@ -12,7 +12,7 @@
  *           Historical: the current code refuses the speaker socket without an
  *           admin sign-in, so this profile only reproduces the baseline against the
  *           original commit (9c31216), not against today's code.
- *   after   the event setup: NODE_ENV=production, admin login, SESSION_CODES=MAIN,MAIN-2,
+ *   after   the event setup: NODE_ENV=production, admin login, sessions MAIN and MAIN-2,
  *           DeepL path to the mock (Azure configured too, for the live-switch test)
  *
  * Throwaway admin credentials are generated per run and never written to disk.
@@ -54,7 +54,6 @@ const profiles = {
     SESSION_SECRET: crypto.randomBytes(32).toString('hex'),
     ADMIN_EMAIL: admin.email,
     ADMIN_PASSWORD: admin.password,
-    SESSION_CODES: 'MAIN,MAIN-2',
     ALLOWED_ORIGINS: base,
     DEEPL_API_KEY: 'mock-deepl-key',
     DEEPL_API_URL: `${mockUrl}/v2/translate`,
