@@ -31,6 +31,7 @@
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:12px 22px; border-radius:10px; cursor:pointer; font-size:14px;}
   .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
   .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
+  a.btn-outline{display:inline-block; text-decoration:none;}
 
   .controls.with-alt{grid-template-columns:1fr 1fr 1fr 1fr auto;}
   .grid{display:grid; grid-template-columns:1.3fr 1fr; gap:20px;}
@@ -74,7 +75,6 @@
   .login-card label{margin-top:14px;}
   .login-error{font-size:13px; color:#F59E0B; margin-top:12px; display:none;}
   .header-actions{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
-  .stage-tag{font-size:12.5px; color:var(--sky); font-weight:600;}
 </style>
 </head>
 <body>
@@ -88,7 +88,7 @@
       <div class="brand-name">TekiLive</div>
     </div>
     <h1>Presenter sign-in</h1>
-    <div class="lede">Console access is limited to assigned stage managers. Contact your event admin if you don't have a login.</div>
+    <div class="lede">Sign in with the event admin account. The same sign-in works on the admin dashboard.</div>
     <label for="loginEmail">Email</label>
     <input id="loginEmail" type="email" autocomplete="username">
     <label for="loginPassword">Password</label>
@@ -111,8 +111,8 @@
       </div>
     </div>
     <div class="header-actions">
-      <span class="stage-tag" id="stageTag" style="display:none;"></span>
       <div class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">Not connected</span></div>
+      <a class="btn-outline" id="adminLink" href="/admin.html" style="display:none;">Admin dashboard</a>
       <button class="btn-outline" id="logoutBtn" style="display:none;">Log out</button>
     </div>
   </header>
@@ -120,7 +120,7 @@
   <div class="controls">
     <div>
       <label for="sessionCode">Session / panel code</label>
-      <input id="sessionCode" value="DEMO" maxlength="12" style="text-transform:uppercase;">
+      <input id="sessionCode" value="MAIN" maxlength="12" style="text-transform:uppercase;">
     </div>
     <div>
       <label for="srcLang">Speaker is talking in</label>
@@ -138,7 +138,9 @@
         <option value="quality">Best quality — ~7s behind</option>
       </select>
     </div>
-    <div style="display:flex; gap:10px;">
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn-outline" id="openSessionBtn">Open session</button>
+      <button class="btn-outline" id="copyPresenterLinkBtn" disabled title="Open the session first">Copy presenter link</button>
       <button class="gradient-btn" id="toggleBtn">Start listening</button>
     </div>
   </div>
@@ -147,7 +149,7 @@
   <div id="micStatus" style="display:none; color:var(--gray); font-size:12.5px; margin:-14px 0 24px;"></div>
   <div id="translationWarning" style="display:none; color:#F59E0B; font-size:13px; margin:-14px 0 24px;"></div>
 
-  <div class="panel" style="margin-bottom:24px;">
+  <div class="panel" id="brandingPanel" style="margin-bottom:24px;">
     <div class="panel-title">Event branding — shown to your audience</div>
     <div class="branding-grid">
       <div>
@@ -164,14 +166,14 @@
         <label for="eventLogoInput">Event logo</label>
         <div class="logo-upload">
           <img class="logo-preview" id="eventLogoPreview" alt="">
-          <input type="file" id="eventLogoInput" accept="image/*">
+          <input type="file" id="eventLogoInput" accept="image/png,image/jpeg,image/webp">
         </div>
       </div>
       <div>
         <label for="orgLogoInput">Organizer logo</label>
         <div class="logo-upload">
           <img class="logo-preview" id="orgLogoPreview" alt="">
-          <input type="file" id="orgLogoInput" accept="image/*">
+          <input type="file" id="orgLogoInput" accept="image/png,image/jpeg,image/webp">
         </div>
       </div>
     </div>
@@ -192,7 +194,7 @@
         <div class="stat-row"><span>Connected devices</span><span class="stat-count" id="totalCount">0</span></div>
         <div class="stat-row"><span>Translation latency</span><span class="stat-count" id="latencyValue">—</span></div>
       </div>
-      <div class="qr-wrap">
+      <div class="qr-wrap" id="qrWrap">
         <img id="qrImg" alt="QR code to join">
         <div>
           <div style="font-size:13px; margin-bottom:4px;">Audience scans to join</div>
@@ -292,6 +294,21 @@ const micWarning = document.getElementById('micWarning');
 const translationWarning = document.getElementById('translationWarning');
 const micStatus = document.getElementById('micStatus');
 
+// /present.html is this console in presenter mode, opened from a presenter
+// link (/present.html?session=CODE#key=KEY). The key sits after "#", which the
+// browser never sends to the server, and goes to the caption socket as a
+// subprotocol. No sign-in, and none of the admin tools: the session field is
+// fixed, and branding and the presenter link are hidden. The attendee QR and
+// join link stay, so the speaker can put them on screen.
+const PRESENTER_MODE = location.pathname === '/present.html';
+const presenterKey = PRESENTER_MODE ? (new URLSearchParams(location.hash.slice(1)).get('key') || '') : '';
+if (PRESENTER_MODE) {
+  sessionInput.value = (new URLSearchParams(location.search).get('session') || '').trim().toUpperCase();
+  sessionInput.disabled = true;
+  document.getElementById('brandingPanel').style.display = 'none';
+  document.title = 'TekiLive — Presenter';
+}
+
 // Flight recorder: a rolling record of what the speech engine, the chunker
 // and the server connection are each doing, posted to the server every couple
 // of seconds (only if the server has CLIENT_LOG=1 — otherwise it answers 404
@@ -355,11 +372,11 @@ srcSelect.addEventListener('change', () => {
 updateFeedDirection();
 
 function setupQr(){
-  const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
+  const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
+  sessionBadge.textContent = code;
   const joinUrl = `${location.origin}/join.html?session=${code}`;
   qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(joinUrl)}`;
   qrUrl.textContent = joinUrl;
-  sessionBadge.textContent = code;
 }
 sessionInput.addEventListener('change', setupQr);
 setupQr();
@@ -379,7 +396,7 @@ const footerOrgLogo = document.getElementById('footerOrgLogo');
 const footerOrgName = document.getElementById('footerOrgName');
 
 function currentSessionCode(){
-  return sessionInput.value.trim().toUpperCase() || 'DEMO';
+  return sessionInput.value.trim().toUpperCase() || 'MAIN';
 }
 
 function showLogoPreview(imgEl, src){
@@ -429,7 +446,7 @@ saveBrandingBtn.addEventListener('click', async () => {
     orgLogoInput.value = '';
     brandingStatus.textContent = 'Saved';
   } catch (e) {
-    brandingStatus.textContent = 'Save failed — try an image under 2MB';
+    brandingStatus.textContent = `Save failed: ${e.message}. Logos must be PNG, JPEG or WebP, 500 KB max.`;
     brandingStatus.classList.add('error');
   } finally {
     saveBrandingBtn.disabled = false;
@@ -440,30 +457,114 @@ const WS_STALE_TIMEOUT_MS = 28000; // just over 2x the server's 12s heartbeat
 let lastServerMessageAt = Date.now();
 let connectedCode = null;
 
+// Admin consoles get the session's presenter key when they connect; build the
+// link the speaker opens. Presenter consoles never receive it.
+const openSessionBtn = document.getElementById('openSessionBtn');
+const copyPresenterLinkBtn = document.getElementById('copyPresenterLinkBtn');
+let presenterLink = '';
+if (PRESENTER_MODE) { openSessionBtn.style.display = 'none'; copyPresenterLinkBtn.style.display = 'none'; }
+
+function showPresenterLink(code, key){
+  presenterLink = !PRESENTER_MODE && key
+    ? `${location.origin}/present.html?session=${encodeURIComponent(code)}#key=${encodeURIComponent(key)}`
+    : '';
+  copyPresenterLinkBtn.disabled = !presenterLink;
+}
+copyPresenterLinkBtn.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(presenterLink); copyPresenterLinkBtn.textContent = 'Copied'; }
+  catch (err) { prompt('Copy the presenter link and send it to the speaker:', presenterLink); }
+  setTimeout(() => { copyPresenterLinkBtn.textContent = 'Copy presenter link'; }, 2000);
+});
+
+// The admin console opens its session on purpose (Open session, or Start
+// listening), not just by loading the page, so a session only takes a slot
+// when it is meant to.
+function setSessionUi(state){
+  if (PRESENTER_MODE) return;
+  openSessionBtn.disabled = state !== 'closed';
+  openSessionBtn.textContent = state === 'open' ? 'Session open' : state === 'opening' ? 'Opening…' : 'Open session';
+  if (state !== 'open') showPresenterLink('', '');
+}
+openSessionBtn.addEventListener('click', () => { if (!ws) connectWs(); });
+
 function connectWs(){
-  const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
+  const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
   connectedCode = code;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${proto}://${location.host}?role=speaker&session=${code}`);
+  const url = `${proto}://${location.host}?role=speaker&session=${code}`;
+  const socket = PRESENTER_MODE ? new WebSocket(url, ['tekilive-presenter', presenterKey]) : new WebSocket(url);
   ws = socket;
+  setSessionUi('opening');
   lastServerMessageAt = Date.now();
-  socket.onopen = () => { statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); dbg('ws-open', code); flushOutbox(); };
+  socket.onopen = () => { socket.opened = true; statusText.textContent = 'Connected'; lastServerMessageAt = Date.now(); dbg('ws-open', code); flushOutbox(); };
   socket.onclose = () => {
     dbg('ws-close', socket.manualClose ? 'manual' : 'unexpected — reconnecting');
     // Flag lives on the socket itself, not a shared variable — closing this
     // socket to reconnect elsewhere must not race with the *new* socket's
     // own state (a shared flag reset by connectWs() before this fires would
     // let this stale handler schedule a duplicate reconnect anyway).
-    if (socket.manualClose) return;
+    if (socket.manualClose) {
+      // Only the current socket resets the buttons; an old one closed while
+      // switching codes must not undo the new session's state.
+      if (ws === socket) { ws = null; setSessionUi('closed'); }
+      return;
+    }
     statusText.textContent = 'Disconnected — retrying…';
-    setTimeout(connectWs, 1500);
+    setSessionUi('opening');
+    if (PRESENTER_MODE) {
+      // A presenter link only works once the admin has opened the session
+      // (and again after a server restart, once the admin console is back).
+      if (socket.opened) return setTimeout(connectWs, 1500);
+      // The browser can't see why a socket was refused, so ask whether the
+      // session is open: if it is, waiting won't help and the message says so.
+      fetch(`/api/session/${encodeURIComponent(code)}/branding`)
+        .then(res => {
+          statusText.textContent = res.status === 404
+            ? `Waiting for session ${code} to be opened by the admin…`
+            : `Session ${code} is open, but the server refused this presenter page. The link may be wrong or out of date, or this address (${location.origin}) is not in the server's ALLOWED_ORIGINS. Ask the admin.`;
+        })
+        .catch(() => {})
+        .finally(() => setTimeout(connectWs, 5000));
+      return;
+    }
+    // The server refuses the caption socket once the sign-in has expired (or
+    // was ended in another tab); retrying would loop forever, so ask to sign
+    // in again instead. A network error here just means keep retrying.
+    fetch('/api/auth/me')
+      .then(res => {
+        if (res.status === 401) return showLogin();
+        if (socket.opened) return setTimeout(connectWs, 1500);
+        // Refused before it opened: most likely every session slot is taken.
+        // Say so, and keep trying, so it connects once an admin ends one.
+        return fetch('/api/admin/sessions').then(r => r.ok ? r.json().then(list => {
+          const limit = Number(r.headers.get('X-Session-Limit'));
+          if (limit && list.length >= limit && !list.some(s => s.code === code)) {
+            statusText.textContent = `Can't open session ${code}: all ${limit} sessions are in use. End one in the admin dashboard; this console keeps trying.`;
+            return setTimeout(connectWs, 5000);
+          }
+          // Signed in and a slot is free, yet refused: the remaining cause is
+          // the origin check, which would otherwise look like endless retrying.
+          statusText.textContent = `The server refused this console's connection. If ALLOWED_ORIGINS is set on the server, it must include ${location.origin}. Retrying…`;
+          setTimeout(connectWs, 5000);
+        }) : setTimeout(connectWs, 1500));
+      })
+      .catch(() => setTimeout(connectWs, 1500));
   };
   socket.onmessage = (evt) => {
     lastServerMessageAt = Date.now();
     const msg = JSON.parse(evt.data);
     if (msg.type === 'stats') renderStats(msg);
     if (msg.type === 'joined' && msg.branding) renderBranding(msg.branding);
+    if (msg.type === 'joined') { setSessionUi('open'); showPresenterLink(code, msg.presenterKey); }
     if (msg.type === 'branding') renderBranding(msg.branding);
+    if (msg.type === 'session_ended') {
+      // Ended from the admin dashboard. Don't reopen it by reconnecting;
+      // changing the session code (or reloading) starts again on purpose.
+      socket.manualClose = true;
+      statusText.textContent = PRESENTER_MODE
+        ? `Session ${code} was ended by the admin.`
+        : `Session ${code} was ended from the admin dashboard. Press Open session to start it again.`;
+    }
     if (msg.type === 'error') dbg('server-error', `${msg.lang}: ${msg.detail || msg.message}`);
     if (msg.type === 'delivered') dbg('delivered', `${msg.lang} ${msg.latency}ms`);
     if (msg.type === 'error'){
@@ -487,9 +588,12 @@ function connectWs(){
 // the speaker socket silently pinned to whatever code was there at
 // connect time, so transcripts went to a session nobody was listening in.
 sessionInput.addEventListener('change', () => {
-  const code = sessionInput.value.trim().toUpperCase() || 'DEMO';
-  if (code === connectedCode) return;
-  if (ws) { ws.manualClose = true; ws.close(); }
+  const code = sessionInput.value.trim().toUpperCase() || 'MAIN';
+  // Not open yet: only the QR follows the new code (setupQr). Already open:
+  // move this console to the new code, which opens that session.
+  if (!ws || code === connectedCode) return;
+  ws.manualClose = true;
+  ws.close();
   connectWs();
 });
 
@@ -774,6 +878,9 @@ function handleResult(event){
 
 toggleBtn.addEventListener('click', () => {
   if (!listening){
+    // Starting to speak opens the session too, if it isn't open yet; the
+    // first chunks wait in the outbox until the socket is up.
+    if (!PRESENTER_MODE && !ws) connectWs();
     showMicWarning('');
     engineLang = srcSelect.value; misses = [];
     chunker = makeChunker();
@@ -789,11 +896,12 @@ toggleBtn.addEventListener('click', () => {
 });
 
 // --- Auth gate -------------------------------------------------------
-// Console access is gated behind sign-in when accounts are configured
-// on this deployment (DATABASE_URL + SESSION_SECRET set). If they're
-// not set — local dev, or a deployment that hasn't opted in yet — this
-// falls back to the original open-console behavior rather than locking
-// anyone out.
+// Console access always requires sign-in, same as the admin page: one
+// admin account (SESSION_SECRET + ADMIN_EMAIL + ADMIN_PASSWORD) and one
+// session cookie cover both pages. There is no open fallback when accounts
+// are not configured; the login request then reports that error. The server
+// enforces the same rule on the caption socket and the branding upload, so
+// this screen is not the only gate.
 const loginScreen = document.getElementById('loginScreen');
 const consoleWrap = document.getElementById('consoleWrap');
 const loginBtn = document.getElementById('loginBtn');
@@ -801,20 +909,18 @@ const loginEmail = document.getElementById('loginEmail');
 const loginPassword = document.getElementById('loginPassword');
 const loginError = document.getElementById('loginError');
 const logoutBtn = document.getElementById('logoutBtn');
-const stageTag = document.getElementById('stageTag');
+const adminLink = document.getElementById('adminLink');
 
 function showConsole(user){
   loginScreen.style.display = 'none';
   consoleWrap.style.display = 'block';
-  if (user && user.role === 'stage_manager'){
-    sessionInput.value = user.sessionCode;
-    sessionInput.disabled = true;
-    setupQr();
-    loadBranding();
-    stageTag.textContent = `Stage: ${user.stageName || user.sessionCode}`;
-    stageTag.style.display = 'inline';
+  if (!PRESENTER_MODE) {
+    logoutBtn.style.display = 'inline-block';
+    adminLink.style.display = 'inline-block';
+    // The admin opens the session with Open session or Start listening.
+    if (!ws) { setSessionUi('closed'); statusText.textContent = 'Session not open yet'; }
+    return;
   }
-  if (user) logoutBtn.style.display = 'inline-block';
   connectWs();
 }
 
@@ -852,15 +958,25 @@ logoutBtn.addEventListener('click', async () => {
 });
 
 (async function bootstrapAuth(){
+  if (PRESENTER_MODE) {
+    // The presenter link is the credential; the server checks it on the socket.
+    if (!sessionInput.value || !presenterKey) {
+      loginScreen.style.display = 'none';
+      consoleWrap.style.display = 'block';
+      toggleBtn.disabled = true;
+      statusText.textContent = 'This presenter link is incomplete. Ask the admin for the full link.';
+      return;
+    }
+    showConsole(null);
+    return;
+  }
   try {
     const res = await fetch('/api/auth/me');
     if (res.ok) { showConsole(await res.json()); return; }
-    const data = await res.json().catch(() => ({}));
-    if (data.authConfigured === false) { showConsole(null); return; } // accounts not set up here — stay open
-    showLogin();
   } catch (e) {
-    showConsole(null); // can't reach auth — fail open rather than lock out the presenter
+    // can't reach auth: fall through to the sign-in screen
   }
+  showLogin();
 })();
 </script>
 </body>

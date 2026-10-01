@@ -8,7 +8,7 @@ services:
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
-        value: 20.11.0
+        value: "22"
       - key: ALLOWED_ORIGINS
         value: ""
       - key: DEEPL_API_KEY
@@ -19,8 +19,8 @@ services:
         sync: false
       - key: AZURE_TRANSLATOR_REGION
         sync: false
-      - key: DATABASE_URL
-        sync: false
+      - key: NODE_ENV
+        value: production
       - key: SESSION_SECRET
         sync: false
       - key: ADMIN_EMAIL

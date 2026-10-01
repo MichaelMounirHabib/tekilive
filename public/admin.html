@@ -22,12 +22,11 @@
 
   label{display:block; font-size:12.5px; color:var(--gray); margin-bottom:7px; font-weight:500;}
   input, select{width:100%; background:var(--panel-2); border:1px solid var(--border); color:var(--white); font-family:inherit; padding:10px 12px; border-radius:10px; font-size:14px;}
-  .role-badge{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:rgba(56,189,248,.15); color:var(--sky);}
-  .role-badge.admin{background:rgba(124,58,237,.18); color:#C4B5FD;}
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:11px 20px; border-radius:10px; cursor:pointer; font-size:14px;}
   .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
   .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
-  .btn-danger{background:transparent; border:1px solid #7f2531; color:#F87171; font-family:inherit; font-weight:500; padding:7px 12px; border-radius:8px; cursor:pointer; font-size:12.5px;}
+  a.btn-outline{display:inline-block; text-decoration:none;}
+  .header-actions{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
 
   .panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
   .panel-title{font-size:13px; font-weight:600; color:var(--gray); margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;}
@@ -44,13 +43,11 @@
   .lang-chips{display:flex; flex-wrap:wrap; gap:6px;}
   .lang-chip{font-size:12px; background:var(--panel-2); border:1px solid var(--border); padding:4px 10px; border-radius:999px;}
 
-  table{width:100%; border-collapse:collapse; font-size:13.5px;}
-  th{text-align:left; font-size:11.5px; color:var(--gray); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border);}
-  td{padding:10px; border-bottom:1px solid var(--border); vertical-align:middle;}
-  tr:last-child td{border-bottom:none;}
-
-  .new-user-grid{display:grid; grid-template-columns:0.9fr 1.3fr 1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:6px;}
-  @media (max-width:900px){ .new-user-grid{grid-template-columns:1fr 1fr;} }
+  .provider-now{font-size:14px; margin-bottom:6px;}
+  .provider-warning{font-size:13px; color:#F59E0B; margin-bottom:10px; display:none;}
+  .provider-grid{display:grid; grid-template-columns:1fr 1.6fr 1fr; gap:12px; align-items:end; margin:14px 0 12px;}
+  @media (max-width:900px){ .provider-grid{grid-template-columns:1fr;} }
+  .provider-actions{display:flex; gap:10px; flex-wrap:wrap;}
   .form-status{font-size:12.5px; color:var(--gray); margin-top:8px;}
   .form-status.error{color:#F59E0B;}
 
@@ -84,21 +81,6 @@
   </div>
 </div>
 
-<div class="login-wrap" id="deniedScreen" style="display:none;">
-  <div class="login-card">
-    <div class="brand">
-      <div class="brand-mark">
-        <span>TL</span>
-        <img src="/branding/tekiminds-logo.png" alt="TekiMinds" onload="this.previousElementSibling.style.display='none'; this.style.display='block';" onerror="this.remove();">
-      </div>
-      <div class="brand-name">TekiLive</div>
-    </div>
-    <h1>Admin access required</h1>
-    <div class="lede">This account isn't an admin. If you're a stage manager, use the presenter console instead.</div>
-    <button class="btn-outline" id="deniedLogoutBtn" style="width:100%;">Log out</button>
-  </div>
-</div>
-
 <div class="wrap" id="adminWrap" style="display:none;">
   <header>
     <div class="brand">
@@ -111,63 +93,71 @@
         <div class="brand-sub">Admin overview</div>
       </div>
     </div>
-    <button class="btn-outline" id="logoutBtn">Log out</button>
+    <div class="header-actions">
+      <a class="btn-outline" href="/control.html">Control console</a>
+      <button class="btn-outline" id="logoutBtn">Log out</button>
+    </div>
   </header>
 
   <div class="panel">
     <div class="panel-title"><span>Active sessions</span><span id="sessionsUpdated"></span></div>
+    <div class="provider-actions" style="align-items:center; margin-bottom:16px;">
+      <label for="sessionLimitInput" style="margin:0;">Session limit</label>
+      <input id="sessionLimitInput" type="number" min="1" max="100" style="width:90px;">
+      <button class="btn-outline" id="saveLimitBtn">Save</button>
+      <button class="btn-outline" id="resetLimitBtn">Reset to default</button>
+      <span class="form-status" id="limitStatus" style="margin:0;"></span>
+    </div>
     <div id="sessionsList"></div>
   </div>
 
   <div class="panel">
-    <div class="panel-title">Accounts</div>
-    <div class="new-user-grid">
+    <div class="panel-title">Translation provider</div>
+    <div class="provider-now" id="providerNow">Loading…</div>
+    <div class="provider-warning" id="providerWarning"></div>
+    <div class="provider-grid">
       <div>
-        <label for="newRole">Role</label>
-        <select id="newRole">
-          <option value="stage_manager">Stage manager</option>
-          <option value="admin">Admin</option>
+        <label for="providerSelect">Switch to</label>
+        <select id="providerSelect">
+          <option value="deepl">DeepL</option>
+          <option value="azure">Azure Translator</option>
+          <option value="mymemory">MyMemory (free fallback)</option>
         </select>
       </div>
-      <div>
-        <label for="newEmail">Email</label>
-        <input id="newEmail" type="email" placeholder="stage@tekiminds.local">
+      <div data-for="deepl">
+        <label for="deeplKey">DeepL API key</label>
+        <input id="deeplKey" type="password" autocomplete="off" placeholder="Free keys end in :fx">
       </div>
-      <div>
-        <label for="newPassword">Password</label>
-        <input id="newPassword" type="password" placeholder="min 8 characters">
+      <div data-for="azure">
+        <label for="azureKey">Azure Translator key</label>
+        <input id="azureKey" type="password" autocomplete="off">
       </div>
-      <div id="newSessionCodeField">
-        <label for="newSessionCode">Session code</label>
-        <input id="newSessionCode" placeholder="e.g. STAGE1" style="text-transform:uppercase;">
+      <div data-for="azure">
+        <label for="azureRegion">Azure region</label>
+        <input id="azureRegion" autocomplete="off" placeholder="e.g. westeurope">
       </div>
-      <div id="newStageNameField">
-        <label for="newStageName">Stage label</label>
-        <input id="newStageName" placeholder="e.g. Main Hall">
+      <div data-for="mymemory">
+        <label for="mymemoryEmail">Email (optional, raises the free limit)</label>
+        <input id="mymemoryEmail" type="email" autocomplete="off">
       </div>
-      <button class="gradient-btn" id="addUserBtn">Add account</button>
     </div>
-    <div class="form-status" id="userFormStatus"></div>
-    <table style="margin-top:16px;">
-      <thead>
-        <tr><th>Email</th><th>Role</th><th>Session</th><th>Stage</th><th>Created</th><th></th></tr>
-      </thead>
-      <tbody id="usersTableBody"></tbody>
-    </table>
-    <div class="empty-note" id="usersEmptyNote" style="display:none;">No accounts yet.</div>
+    <div class="provider-actions">
+      <button class="gradient-btn" id="switchProviderBtn">Test &amp; switch</button>
+      <button class="btn-outline" id="resetProviderBtn">Reset to defaults</button>
+    </div>
+    <div class="form-status" id="providerStatus">Applies to both sessions from the next caption. A test translation runs first; if it fails, nothing changes.</div>
   </div>
 </div>
 
 <script>
 const loginScreen = document.getElementById('loginScreen');
-const deniedScreen = document.getElementById('deniedScreen');
 const adminWrap = document.getElementById('adminWrap');
 const loginBtn = document.getElementById('loginBtn');
 const loginEmail = document.getElementById('loginEmail');
 const loginPassword = document.getElementById('loginPassword');
 const loginError = document.getElementById('loginError');
 
-function show(el){ [loginScreen, deniedScreen, adminWrap].forEach(x => x.style.display = 'none'); el.style.display = el === adminWrap ? 'block' : 'block'; }
+function show(el){ [loginScreen, adminWrap].forEach(x => x.style.display = 'none'); el.style.display = 'block'; }
 
 async function attemptLogin(){
   loginError.style.display = 'none';
@@ -197,13 +187,13 @@ async function logout(){
   show(loginScreen);
 }
 document.getElementById('logoutBtn').addEventListener('click', logout);
-document.getElementById('deniedLogoutBtn').addEventListener('click', logout);
 
 function afterAuth(user){
-  if (user.role !== 'admin') { show(deniedScreen); return; }
+  if (user.role !== 'admin') { show(loginScreen); return; }
   show(adminWrap);
   refreshSessions();
-  refreshUsers();
+  refreshLimit();
+  refreshTranslator();
   startPolling();
 }
 
@@ -223,16 +213,19 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 }
 
-function renderSessions(list){
+function renderSessions(list, limit){
   const el = document.getElementById('sessionsList');
-  document.getElementById('sessionsUpdated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  document.getElementById('sessionsUpdated').textContent = `${list.length} of ${limit || '?'} sessions · updated ${new Date().toLocaleTimeString()}`;
   if (!list.length){
-    el.innerHTML = '<div class="empty-note">No active sessions right now. A session appears here as soon as a presenter or attendee connects.</div>';
+    const note = document.createElement('div');
+    note.className = 'empty-note';
+    note.textContent = 'No open sessions. A session opens when a presenter connects the console or saves branding with its code.';
+    el.replaceChildren(note);
     return;
   }
   el.innerHTML = list.map(s => {
     const chips = Object.entries(s.audienceByLanguage)
-      .map(([lang, count]) => `<span class="lang-chip">${LANGUAGE_NAMES[lang] || lang}: ${count}</span>`)
+      .map(([lang, count]) => `<span class="lang-chip">${escapeHtml(LANGUAGE_NAMES[lang] || lang)}: ${count}</span>`)
       .join('') || '<span class="lang-chip">No audience yet</span>';
     const eventLine = s.branding.eventName || s.branding.orgName
       ? `${escapeHtml(s.branding.eventName || '')}${s.branding.eventName && s.branding.orgName ? ' — ' : ''}${escapeHtml(s.branding.orgName || '')}`
@@ -245,6 +238,10 @@ function renderSessions(list){
             <span class="badge ${s.speakerConnected ? 'live' : 'idle'}" style="margin-left:8px;">${s.speakerConnected ? 'Presenter connected' : 'No presenter'}</span>
           </div>
           <span class="session-event">${eventLine}</span>
+          <span>
+            <button class="btn-outline copy-presenter-btn" data-code="${escapeHtml(s.code)}" data-key="${escapeHtml(s.presenterKey || '')}">Copy presenter link</button>
+            <button class="btn-outline end-session-btn" data-code="${escapeHtml(s.code)}">End session</button>
+          </span>
         </div>
         <div class="lang-chips">
           <span class="lang-chip">Total audience: ${s.audienceTotal}</span>
@@ -252,84 +249,149 @@ function renderSessions(list){
         </div>
       </div>`;
   }).join('');
+  el.querySelectorAll('.end-session-btn').forEach(btn => btn.addEventListener('click', () => endSession(btn.dataset.code)));
+  el.querySelectorAll('.copy-presenter-btn').forEach(btn => btn.addEventListener('click', () => copyPresenterLink(btn)));
+}
+
+// The key goes after "#", so the browser never sends it to the server.
+async function copyPresenterLink(btn){
+  const link = `${location.origin}/present.html?session=${encodeURIComponent(btn.dataset.code)}#key=${encodeURIComponent(btn.dataset.key)}`;
+  try { await navigator.clipboard.writeText(link); btn.textContent = 'Copied'; }
+  catch (err) { prompt('Copy the presenter link:', link); }
+  setTimeout(() => { btn.textContent = 'Copy presenter link'; }, 2000);
+}
+
+// --- Session limit ------------------------------------------------------
+const sessionLimitInput = document.getElementById('sessionLimitInput');
+const limitStatus = document.getElementById('limitStatus');
+
+function renderLimit(s){
+  sessionLimitInput.value = s.maxSessions;
+  limitStatus.classList.remove('error');
+  limitStatus.textContent = s.source === 'admin'
+    ? `Set here (default from server settings: ${s.defaultMaxSessions}). Lowering it never closes open sessions.`
+    : `Default from server settings. Lowering it never closes open sessions.`;
+}
+
+async function refreshLimit(){
+  try {
+    const res = await fetch('/api/admin/settings');
+    if (res.ok) renderLimit(await res.json());
+  } catch (e) {}
+}
+
+async function sendLimit(method, body){
+  try {
+    const res = await fetch('/api/admin/settings', { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not change the limit');
+    renderLimit(data);
+    refreshSessions();
+  } catch (err) {
+    limitStatus.textContent = err.message;
+    limitStatus.classList.add('error');
+  }
+}
+document.getElementById('saveLimitBtn').addEventListener('click', () => sendLimit('POST', { maxSessions: Number(sessionLimitInput.value) }));
+document.getElementById('resetLimitBtn').addEventListener('click', () => sendLimit('DELETE'));
+
+// Closes every console and phone on the session and frees its slot.
+async function endSession(code){
+  if (!confirm(`End session ${code}? Its presenter console and every attendee are disconnected, and its branding is removed.`)) return;
+  try {
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not end the session');
+  } catch (err) {
+    alert(err.message);
+  }
+  refreshSessions();
 }
 
 async function refreshSessions(){
   try {
     const res = await fetch('/api/admin/sessions');
-    if (res.ok) renderSessions(await res.json());
+    if (res.ok) renderSessions(await res.json(), Number(res.headers.get('X-Session-Limit')));
   } catch (e) {}
 }
 
-function renderUsers(users){
-  const body = document.getElementById('usersTableBody');
-  const empty = document.getElementById('usersEmptyNote');
-  empty.style.display = users.length ? 'none' : 'block';
-  body.innerHTML = users.map(u => `
-    <tr>
-      <td>${escapeHtml(u.email)}</td>
-      <td><span class="role-badge ${u.role === 'admin' ? 'admin' : ''}">${u.role === 'admin' ? 'Admin' : 'Stage manager'}</span></td>
-      <td>${escapeHtml(u.session_code || '—')}</td>
-      <td>${escapeHtml(u.stage_name || '—')}</td>
-      <td>${new Date(u.created_at).toLocaleDateString()}</td>
-      <td><button class="btn-danger" data-id="${u.id}">Remove</button></td>
-    </tr>`).join('');
-  body.querySelectorAll('button[data-id]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm(`Remove account ${btn.closest('tr').children[0].textContent}?`)) return;
-      const res = await fetch(`/api/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert(data.error || 'Failed to remove account');
-        return;
-      }
-      refreshUsers();
-    });
+// --- Translation provider ---------------------------------------------
+// The server never returns a full key, only its last 4 characters.
+const providerSelect = document.getElementById('providerSelect');
+const providerStatus = document.getElementById('providerStatus');
+const switchProviderBtn = document.getElementById('switchProviderBtn');
+const resetProviderBtn = document.getElementById('resetProviderBtn');
+const providerInputs = ['deeplKey', 'azureKey', 'azureRegion', 'mymemoryEmail'].map(id => document.getElementById(id));
+
+function showProviderFields(){
+  document.querySelectorAll('[data-for]').forEach(el => {
+    el.style.display = el.dataset.for === providerSelect.value ? 'block' : 'none';
   });
 }
+providerSelect.addEventListener('change', showProviderFields);
+showProviderFields();
 
-async function refreshUsers(){
+function setProviderStatus(text, isError){
+  providerStatus.textContent = text;
+  providerStatus.classList.toggle('error', !!isError);
+}
+
+function renderProvider(s){
+  const details = [s.key ? `key ${s.key}` : null, s.region ? `region ${s.region}` : null].filter(Boolean).join(', ');
+  const where = s.source === 'admin' ? 'set from this dashboard' : 'default from server settings';
+  document.getElementById('providerNow').textContent = `Active: ${s.providerName}${details ? ` (${details})` : ''}, ${where}.`;
+  const warning = document.getElementById('providerWarning');
+  warning.textContent = s.warning || '';
+  warning.style.display = s.warning ? 'block' : 'none';
+  resetProviderBtn.disabled = s.source !== 'admin';
+}
+
+async function refreshTranslator(){
   try {
-    const res = await fetch('/api/admin/users');
-    if (res.ok) renderUsers(await res.json());
+    const res = await fetch('/api/admin/translator');
+    if (res.ok) renderProvider(await res.json());
   } catch (e) {}
 }
 
-const newRole = document.getElementById('newRole');
-function updateRoleFields(){
-  const isAdmin = newRole.value === 'admin';
-  document.getElementById('newSessionCodeField').style.display = isAdmin ? 'none' : 'block';
-  document.getElementById('newStageNameField').style.display = isAdmin ? 'none' : 'block';
-}
-newRole.addEventListener('change', updateRoleFields);
-updateRoleFields();
-
-document.getElementById('addUserBtn').addEventListener('click', async () => {
-  const role = newRole.value;
-  const email = document.getElementById('newEmail').value.trim();
-  const password = document.getElementById('newPassword').value;
-  const sessionCode = document.getElementById('newSessionCode').value.trim();
-  const stageName = document.getElementById('newStageName').value.trim();
-  const status = document.getElementById('userFormStatus');
-  status.classList.remove('error');
-  status.textContent = 'Adding…';
+switchProviderBtn.addEventListener('click', async () => {
+  const provider = providerSelect.value;
+  const body = { provider };
+  if (provider === 'deepl') body.deeplKey = document.getElementById('deeplKey').value.trim();
+  if (provider === 'azure') {
+    body.azureKey = document.getElementById('azureKey').value.trim();
+    body.azureRegion = document.getElementById('azureRegion').value.trim();
+  }
+  if (provider === 'mymemory') body.mymemoryEmail = document.getElementById('mymemoryEmail').value.trim();
+  switchProviderBtn.disabled = true;
+  setProviderStatus('Testing the new settings…');
   try {
-    const res = await fetch('/api/admin/users', {
+    const res = await fetch('/api/admin/translator', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role, email, password, sessionCode, stageName }),
+      body: JSON.stringify(body),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to add account');
-    document.getElementById('newEmail').value = '';
-    document.getElementById('newPassword').value = '';
-    document.getElementById('newSessionCode').value = '';
-    document.getElementById('newStageName').value = '';
-    status.textContent = `Added ${data.email}`;
-    refreshUsers();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Switch failed');
+    renderProvider(data);
+    providerInputs.forEach(input => { input.value = ''; });
+    setProviderStatus(`Switched to ${data.providerName}. Captions use it from the next chunk.`);
   } catch (err) {
-    status.textContent = err.message;
-    status.classList.add('error');
+    setProviderStatus(err.message, true);
+  } finally {
+    switchProviderBtn.disabled = false;
+  }
+});
+
+resetProviderBtn.addEventListener('click', async () => {
+  if (!confirm('Go back to the provider from the server settings?')) return;
+  try {
+    const res = await fetch('/api/admin/translator', { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Reset failed');
+    renderProvider(data);
+    setProviderStatus(`Back to ${data.providerName} from the server settings.`);
+  } catch (err) {
+    setProviderStatus(err.message, true);
   }
 });
 
