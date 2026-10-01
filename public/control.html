@@ -31,6 +31,7 @@
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:12px 22px; border-radius:10px; cursor:pointer; font-size:14px;}
   .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
   .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
+  a.btn-outline{display:inline-block; text-decoration:none;}
 
   .controls.with-alt{grid-template-columns:1fr 1fr 1fr 1fr auto;}
   .grid{display:grid; grid-template-columns:1.3fr 1fr; gap:20px;}
@@ -87,7 +88,7 @@
       <div class="brand-name">TekiLive</div>
     </div>
     <h1>Presenter sign-in</h1>
-    <div class="lede">Console access is limited to assigned stage managers. Contact your event admin if you don't have a login.</div>
+    <div class="lede">Sign in with the event admin account. The same sign-in works on the admin dashboard.</div>
     <label for="loginEmail">Email</label>
     <input id="loginEmail" type="email" autocomplete="username">
     <label for="loginPassword">Password</label>
@@ -111,6 +112,7 @@
     </div>
     <div class="header-actions">
       <div class="status-pill"><span class="dot" id="statusDot"></span><span id="statusText">Not connected</span></div>
+      <a class="btn-outline" id="adminLink" href="/admin.html" style="display:none;">Admin dashboard</a>
       <button class="btn-outline" id="logoutBtn" style="display:none;">Log out</button>
     </div>
   </header>
@@ -454,7 +456,12 @@ function connectWs(){
     // let this stale handler schedule a duplicate reconnect anyway).
     if (socket.manualClose) return;
     statusText.textContent = 'Disconnected — retrying…';
-    setTimeout(connectWs, 1500);
+    // The server refuses the caption socket once the sign-in has expired (or
+    // was ended in another tab); retrying would loop forever, so ask to sign
+    // in again instead. A network error here just means keep retrying.
+    fetch('/api/auth/me')
+      .then(res => { if (res.status === 401) showLogin(); else setTimeout(connectWs, 1500); })
+      .catch(() => setTimeout(connectWs, 1500));
   };
   socket.onmessage = (evt) => {
     lastServerMessageAt = Date.now();
@@ -787,11 +794,12 @@ toggleBtn.addEventListener('click', () => {
 });
 
 // --- Auth gate -------------------------------------------------------
-// Console access is gated behind sign-in when the admin account is
-// configured on this deployment (SESSION_SECRET + ADMIN_EMAIL +
-// ADMIN_PASSWORD set). If not — local dev — this falls back to the
-// original open-console behavior. The server enforces the same rule on
-// the caption socket, so this screen is not the only gate.
+// Console access always requires sign-in, same as the admin page: one
+// admin account (SESSION_SECRET + ADMIN_EMAIL + ADMIN_PASSWORD) and one
+// session cookie cover both pages. There is no open fallback when accounts
+// are not configured; the login request then reports that error. The server
+// enforces the same rule on the caption socket and the branding upload, so
+// this screen is not the only gate.
 const loginScreen = document.getElementById('loginScreen');
 const consoleWrap = document.getElementById('consoleWrap');
 const loginBtn = document.getElementById('loginBtn');
@@ -799,11 +807,13 @@ const loginEmail = document.getElementById('loginEmail');
 const loginPassword = document.getElementById('loginPassword');
 const loginError = document.getElementById('loginError');
 const logoutBtn = document.getElementById('logoutBtn');
+const adminLink = document.getElementById('adminLink');
 
 function showConsole(user){
   loginScreen.style.display = 'none';
   consoleWrap.style.display = 'block';
-  if (user) logoutBtn.style.display = 'inline-block';
+  logoutBtn.style.display = 'inline-block';
+  adminLink.style.display = 'inline-block';
   connectWs();
 }
 
@@ -844,12 +854,10 @@ logoutBtn.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/auth/me');
     if (res.ok) { showConsole(await res.json()); return; }
-    const data = await res.json().catch(() => ({}));
-    if (data.authConfigured === false) { showConsole(null); return; } // accounts not set up here — stay open
-    showLogin();
   } catch (e) {
-    showConsole(null); // can't reach auth — fail open rather than lock out the presenter
+    // can't reach auth: fall through to the sign-in screen
   }
+  showLogin();
 })();
 </script>
 </body>

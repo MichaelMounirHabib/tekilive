@@ -8,7 +8,10 @@
  *   node loadtest/run.js --label=after-attack --profile=after --script=attack
  *
  * Profiles (server env):
- *   before  the original setup: no accounts, any session code, Azure path to the mock
+ *   before  the original setup: no accounts, any session code, Azure path to the mock.
+ *           Historical: the current code refuses the speaker socket without an
+ *           admin sign-in, so this profile only reproduces the baseline against the
+ *           original commit (9c31216), not against today's code.
  *   after   the event setup: NODE_ENV=production, admin login, SESSION_CODES=MAIN,MAIN-2,
  *           DeepL path to the mock (Azure configured too, for the live-switch test)
  *

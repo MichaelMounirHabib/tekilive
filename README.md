@@ -104,9 +104,9 @@ Presenter mic --(Web Speech API, in-browser STT)--> transcript segment
 | `AZURE_TRANSLATOR_REGION` | with the key above | *(empty)* | Azure resource region, e.g. `eastus` |
 | `MYMEMORY_EMAIL` | no | *(empty)* | Optional email passed to the free MyMemory API (only used as a last-resort fallback when no other provider is set) for a higher rate limit |
 | `NODE_ENV` | in production | *(empty)* | Set to `production` on the live deployment. The server then refuses to start unless `SESSION_SECRET`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set (see Accounts), and the login cookie is sent over HTTPS only |
-| `SESSION_SECRET` | in production | *(empty)* | Random string (at least 32 characters) used to sign the admin login cookie |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | in production | *(empty)* | The one admin account (password at least 12 characters). Used to sign in to the presenter console and the admin overview |
-| `SESSION_CODES` | recommended | *(empty = any code)* | Comma-separated session codes the event uses, e.g. `MAIN,MAIN-2`. Any other code is refused. The first one is the default when a link has no code |
+| `SESSION_SECRET` | yes | *(empty)* | Random string (at least 32 characters) used to sign the admin login cookie. Needed to sign in to the presenter console and the admin overview, everywhere including local runs |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | yes | *(empty)* | The one admin account (password at least 12 characters). Needed to sign in to the presenter console and the admin overview, everywhere including local runs |
+| `SESSION_CODES` | in production | *(empty = any code)* | Comma-separated session codes the event uses, e.g. `MAIN,MAIN-2`. Any other code is refused. The first one is the default when a link has no code |
 | `DEEPL_API_URL` | no | *(empty)* | Overrides the DeepL endpoint. Only for the load test's mock translator (`loadtest/`); leave unset |
 | `LOG_FILE` | no | *(empty)* | Also write the server log to this file (relative to the app folder), e.g. `tekilive-debug.log`. Handy for looking at a problem afterwards; kept under 5MB |
 | `CLIENT_LOG` | no | *(empty)* | Set to `1` to let the presenter console report what its speech engine and caption pipeline are doing into the same log (includes transcript snippets). Leave off in production |
@@ -183,7 +183,7 @@ Set it once, shortly before the event starts.
 ## Accounts
 
 One admin account, defined by env settings: `ADMIN_EMAIL`, `ADMIN_PASSWORD`
-and `SESSION_SECRET`. No database. With all three set, signing in is required to:
+and `SESSION_SECRET`. No database. Signing in is required to:
 
 - run the presenter console (`/control.html`) for any session code,
 - change a session's branding,
@@ -204,12 +204,29 @@ checks the session cookie server-side too. Audience join links are
 deliberately **not** gated — attendees scanning a QR code should never need
 an account.
 
-Leave the three settings unset for local development and the console stays
-open with no login, as before. In production (`NODE_ENV=production`) the
-server refuses to start without them, so a missing setting can't leave the
-presenter socket open to anyone.
+Sign-in is required on both the presenter console and the admin overview,
+everywhere, local runs included. One sign-in works on both pages, since they
+share the same login cookie. Without the three settings nobody can sign in, so
+set them for local runs too. In production (`NODE_ENV=production`) the server
+also refuses to start without them or without `SESSION_CODES`. Once signed in,
+each page has a header link to the other. If the sign-in expires mid-talk, the
+console shows the sign-in screen again instead of retrying the connection.
 
 ## Run it locally
+
+Set `SESSION_SECRET`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` (and `SESSION_CODES`
+if you want the event codes) before `npm start`, or nobody can sign in to the
+presenter console or the admin overview. In PowerShell:
+
+```powershell
+$env:SESSION_SECRET = "<random string, at least 32 characters>"
+$env:ADMIN_EMAIL = "admin@example.com"
+$env:ADMIN_PASSWORD = "<at least 12 characters>"
+$env:SESSION_CODES = "MAIN,MAIN-2"   # optional locally; leave unset to allow any code
+```
+
+`SESSION_SECRET` must be at least 32 characters for production and
+`ADMIN_PASSWORD` at least 12.
 
 ```bash
 npm install
@@ -217,7 +234,7 @@ npm start
 ```
 
 Open `http://localhost:3000/control.html` for the presenter console and
-`http://localhost:3000/join.html?session=DEMO` for the audience view. Note:
+`http://localhost:3000/join.html?session=MAIN` for the audience view. Note:
 the Web Speech API requires a secure context in most browsers, so mic
 capture may not work over plain `http://localhost` in all browsers — deploy
 to test the full flow, or use a browser that allows it on localhost.
@@ -290,6 +307,6 @@ beforehand so it never sleeps.
   beforehand; adding a real datastore would unlock branding (and a
   post-event transcript/summary deliverable) surviving restarts.
 - **No auth on audience links:** by design — anyone with the QR/URL can
-  join a session as an attendee. The presenter console is gated
-  behind the admin account once it is configured (see Accounts above);
-  audience join links stay open either way.
+  join a session as an attendee. The presenter console and admin overview
+  always require the admin sign-in (see Accounts above); audience join
+  links stay open.

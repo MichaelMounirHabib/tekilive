@@ -23,7 +23,7 @@ const SESSION_CODES = (process.env.SESSION_CODES || '')
   .split(',')
   .map(c => c.trim().toUpperCase())
   .filter(Boolean);
-const DEFAULT_SESSION = SESSION_CODES[0] || 'DEMO';
+const DEFAULT_SESSION = SESSION_CODES[0] || 'MAIN';
 
 // Only the path and query of a request are used. A constant base means a
 // malformed Host header can't make this throw (it used to, inside the
@@ -105,7 +105,9 @@ function noteLoginFailure(ip) {
 }
 
 app.post('/api/auth/login', (req, res) => {
-  if (!auth.isEnabled()) return res.status(503).json({ error: 'Accounts are not configured on this deployment' });
+  if (!auth.isEnabled()) {
+    return res.status(503).json({ error: 'Sign-in is not set up on this server. Set SESSION_SECRET, ADMIN_EMAIL and ADMIN_PASSWORD where the server runs, then restart it.' });
+  }
   if (loginBlocked(req.ip)) return res.status(429).json({ error: 'Too many failed sign-ins. Try again in 15 minutes.' });
   const body = req.body || {}; // Express 5 leaves it undefined for a non-JSON request
   const email = typeof body.email === 'string' ? body.email : '';
@@ -198,19 +200,13 @@ function brandingMeta(session) {
   };
 }
 
-// Admin-only once accounts are configured; open on local dev without them.
-function requireAdminIfEnabled(req, res, next) {
-  if (!auth.isEnabled()) return next();
-  auth.requireAdmin(req, res, next);
-}
-
 app.get('/api/session/:code/branding', (req, res) => {
   const code = sessionCodeFrom(req.params.code);
   if (!code) return res.status(404).json({ error: 'Session not found' });
   res.json(brandingMeta(sessions.get(code)));
 });
 
-app.post('/api/session/:code/branding', requireAdminIfEnabled, (req, res) => {
+app.post('/api/session/:code/branding', auth.requireAdmin, (req, res) => {
   const code = sessionCodeFrom(req.params.code);
   if (!code) return res.status(404).json({ error: 'Session not found' });
   upload(req, res, (err) => {
@@ -269,10 +265,8 @@ const wss = new WebSocketServer({
       return LANGUAGE_CODES.has(url.searchParams.get('lang') || 'en') ? cb(true) : cb(false, 400, 'Unsupported language');
     }
 
-    // If accounts aren't configured on this deployment (local dev), fall
-    // back to the original open-access behavior rather than locking
-    // everyone out. Production refuses to start in that state.
-    if (!auth.isEnabled()) return cb(true);
+    // Without a configured admin account nobody can sign in, so the
+    // presenter socket is refused, same as the admin pages.
     return auth.readUserFromRequest(info.req) ? cb(true) : cb(false, 401, 'Sign in required');
   },
 });
@@ -543,6 +537,9 @@ process.on('uncaughtException', (err) => {
 
 server.listen(PORT, () => {
   console.log(`TekiLive server listening on port ${PORT}`);
+  if (!auth.isEnabled()) {
+    log(`Sign-in is disabled: missing ${auth.missingSettings().join(', ')}. The presenter console and admin pages stay locked until these are set and the server is restarted.`);
+  }
   const providerWarning = translator.status().warning;
   if (process.env.NODE_ENV === 'production' && providerWarning) log(`WARNING: ${providerWarning}`);
 });

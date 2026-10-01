@@ -19,7 +19,9 @@ node loadtest/suite.js after          # all scenarios against the current code, 
 node loadtest/suite.js after B4-attack  # one scenario
 ```
 
-Profiles: `before` ran the original code with no accounts and any session code.
+Profiles: `before` ran the original code (commit 9c31216) with no accounts and any session code.
+It is kept for reference only: today's code refuses the speaker socket without an admin
+sign-in, so `before` runs against it record every speaker as rejected.
 `after` runs `NODE_ENV=production` with a generated throwaway admin login,
 `SESSION_CODES=MAIN,MAIN-2`, and DeepL pointed at the mock. Results go to
 `loadtest/results/` (git-ignored).

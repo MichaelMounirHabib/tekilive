@@ -25,6 +25,8 @@
   .gradient-btn{background:linear-gradient(90deg, var(--violet) 0%, var(--blue) 100%); border:none; color:#fff; font-family:inherit; font-weight:600; padding:11px 20px; border-radius:10px; cursor:pointer; font-size:14px;}
   .gradient-btn:disabled{opacity:.4; cursor:not-allowed;}
   .btn-outline{background:transparent; border:1px solid var(--border); color:var(--white); font-family:inherit; font-weight:500; padding:10px 16px; border-radius:10px; cursor:pointer; font-size:13px;}
+  a.btn-outline{display:inline-block; text-decoration:none;}
+  .header-actions{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
 
   .panel{background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:24px;}
   .panel-title{font-size:13px; font-weight:600; color:var(--gray); margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;}
@@ -91,7 +93,10 @@
         <div class="brand-sub">Admin overview</div>
       </div>
     </div>
-    <button class="btn-outline" id="logoutBtn">Log out</button>
+    <div class="header-actions">
+      <a class="btn-outline" href="/control.html">Presenter console</a>
+      <button class="btn-outline" id="logoutBtn">Log out</button>
+    </div>
   </header>
 
   <div class="panel">

@@ -3,9 +3,9 @@
  * ADMIN_PASSWORD), and a JWT signed with SESSION_SECRET carried in an
  * httpOnly cookie. No database and no server-side session store.
  *
- * All three must be set for accounts to switch on. Without them (local dev)
- * the presenter console and branding stay open, as before. In production
- * server.js refuses to start without them (see configProblems).
+ * All three must be set for accounts to switch on. Without them nobody can
+ * sign in, so the presenter console, branding and admin pages stay locked.
+ * Production refuses to start without them (see configProblems).
  */
 
 const crypto = require('crypto');
@@ -20,6 +20,14 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 
 function isEnabled() {
   return !!(SESSION_SECRET && ADMIN_EMAIL && ADMIN_PASSWORD);
+}
+
+// Names (never values) of the settings sign-in still needs, so the server
+// can say exactly what to set instead of a bare "not configured".
+function missingSettings() {
+  return [['SESSION_SECRET', SESSION_SECRET], ['ADMIN_EMAIL', ADMIN_EMAIL], ['ADMIN_PASSWORD', ADMIN_PASSWORD]]
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
 }
 
 // What stops this deployment from being safe to run in production.
@@ -94,6 +102,7 @@ function requireAdmin(req, res, next) {
 
 module.exports = {
   isEnabled,
+  missingSettings,
   configProblems,
   checkAdminCredentials,
   signToken,
