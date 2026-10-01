@@ -346,3 +346,53 @@ DeepL/Azure/MyMemory.
   800 lines and riskier before the event.
 - Arabic quality on the new models is unverified; it needs a test with real speakers.
 - New moving parts days before the event. The browser engine stays the default and the fallback.
+
+---
+
+# Session model: any code, presenter-opened, capped (done)
+
+Replaces the `SESSION_CODES` allowlist (D3), at the owner's request.
+- [x] Any code matching `^[A-Z0-9-]{1,12}$`; malformed codes get 400 (WebSocket and HTTP).
+- [x] Only a signed-in presenter opens a session (console connect or branding save).
+      `MAX_SESSIONS` (default 5) caps open sessions; the next one gets 429.
+- [x] Attendees join open sessions only (404 otherwise). The join page shows
+      "Not started yet" and checks again every 4-7 s until the session opens.
+- [x] Admin "End session": sends `session_ended`, closes every socket, frees the slot.
+      Consoles and phones stop reconnecting to an ended session.
+- [x] Cleanup only deletes the session object it was called for, so a socket from an
+      ended session can't delete a newer session opened under the same code.
+- [x] Console says when every slot is in use and keeps retrying.
+- [x] Production no longer requires `SESSION_CODES`.
+- [x] Verified:
+      - `attack.js` 18/18, three runs in a row, 0 uncaught exceptions. New checks:
+        malformed codes, attendees can't open a session, the cap refuses a 6th,
+        End session disconnects everyone and frees the slot, End session needs admin.
+      - WSL with 250+250: 100% delivered, 0 rejected, storm recovery 4.5 s,
+        live provider switch clean.
+
+---
+
+# Presenter page + adjustable session limit (Medium) — done
+
+- [x] Session limit: in-memory admin override via `/api/admin/settings` (GET/POST/DELETE);
+      env `MAX_SESSIONS` stays the default; 1-100; lowering never closes open sessions.
+- [x] Presenter key per session: HMAC-SHA256(SESSION_SECRET, "presenter:" + code), 22 chars,
+      stable across restarts. Revoke: new code, or rotate SESSION_SECRET.
+- [x] Speaker socket accepts the admin cookie OR the presenter key. The key is sent as a
+      WebSocket subprotocol (`tekilive-presenter`, key), never in a URL the server sees.
+      A key only works for a session that is already open: it can't create, brand or end.
+- [x] `/present.html`: the console in presenter mode (same code as control.html).
+      - key in `#key=` (never sent to the server), no-referrer
+      - no sign-in, no branding upload, no session field; attendee QR and join link stay (owner request)
+      - waits and retries while the session isn't open
+- [x] Presenter link shown in control.html (admin) and admin.html (per session, copy button).
+- [x] admin.html: session-limit field (save / reset to default).
+- [x] attack.js:
+      - wrong key refused
+      - right key opens an open session
+      - right key can't open a closed session
+      - limit setting is admin-only and validated
+      - lowering the limit blocks new sessions
+- [x] README.
+
+- [x] Verified: attack.js 24/24 twice (0 uncaught); browser: admin console shows the presenter link, presenter page connects with the key and no sign-in, admin page shows the limit control and copy/end buttons.
